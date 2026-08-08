@@ -12,7 +12,7 @@ set -e
 MUTAGEN="mutagen.exe"
 REMOTE_HOST="a100-B"
 REMOTE_DIR="~/thuongnm_hust/Story_Research"
-CONDA_ENV="thuongnm_gpu"
+CONDA_ENV="story_research"
 CONDA_SH="/data2/shared/apps/conda/etc/profile.d/conda.sh"
 
 MODE="quick"
