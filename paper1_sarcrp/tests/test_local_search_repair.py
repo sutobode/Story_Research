@@ -4,6 +4,7 @@ from sarcrp.local_search_repair import (
     local_search_repair,
     _neighbor_insert_urgent_support,
     _neighbor_replace_tail_with_solver,
+    _neighbor_prioritize_urgent_containers,
 )
 
 
@@ -139,6 +140,53 @@ def test_n5_does_not_duplicate_retrievals_already_covered_by_the_kept_prefix():
     assert retrieved.count("C2") == 1
 
 
+def test_n6_reorders_urgent_container_ahead_of_others_in_the_resolved_tail():
+    state = make_state_with_buried_urgent()  # S1=[C2,C1], C1 on top blocks C2
+    plan = Plan(plan_id="p", created_at=0, source="t", actions=[
+        Action(action_id="a0", step_index=0, type="RETRIEVE", container="C1",
+               source_stack="S1", dest_stack=None, commit_status="planned", planned_time=0),
+        Action(action_id="a1", step_index=1, type="RETRIEVE", container="C2",
+               source_stack="S1", dest_stack=None, commit_status="planned", planned_time=1),
+    ])
+    result = _neighbor_prioritize_urgent_containers(
+        plan, state, frozen_count=0, urgent_containers=["C2"], rng=random.Random(0),
+    )
+    assert result is not None
+    retrieve_positions = {a.container: a.step_index for a in result.actions if a.type == "RETRIEVE"}
+    assert retrieve_positions["C2"] < retrieve_positions["C1"]  # C2 was made urgent, C1 wasn't
+
+    from sarcrp.plan_validator import is_plan_valid
+    assert is_plan_valid(result, state)
+    retrieved = [a.container for a in result.actions if a.type == "RETRIEVE"]
+    assert sorted(retrieved) == ["C1", "C2"]  # every container still retrieved exactly once
+
+
+def test_n6_returns_none_when_no_urgent_containers():
+    state = make_state_with_buried_urgent()
+    plan = Plan(plan_id="p", created_at=0, source="t", actions=[
+        Action(action_id="a0", step_index=0, type="RETRIEVE", container="C1",
+               source_stack="S1", dest_stack=None, commit_status="planned", planned_time=0),
+    ])
+    result = _neighbor_prioritize_urgent_containers(
+        plan, state, frozen_count=0, urgent_containers=[], rng=random.Random(0),
+    )
+    assert result is None
+
+
+def test_n6_returns_none_when_urgent_container_already_covered_by_frozen_prefix():
+    state = make_state_with_buried_urgent()
+    plan = Plan(plan_id="p", created_at=0, source="t", actions=[
+        Action(action_id="a0", step_index=0, type="RETRIEVE", container="C1",
+               source_stack="S1", dest_stack=None, commit_status="planned", planned_time=0),
+        Action(action_id="a1", step_index=1, type="RETRIEVE", container="C2",
+               source_stack="S1", dest_stack=None, commit_status="planned", planned_time=1),
+    ])
+    result = _neighbor_prioritize_urgent_containers(
+        plan, state, frozen_count=1, urgent_containers=["C1"], rng=random.Random(0),  # C1 already retrieved by the frozen prefix
+    )
+    assert result is None
+
+
 def test_n5_returns_none_when_plan_is_fully_frozen():
     state = make_state()
     plan = make_plan(dest="S2")
@@ -193,6 +241,33 @@ def test_local_search_repair_never_returns_worse_than_its_own_starting_score():
     start_score = compute_objective(start_op, start_stab, start_data)
 
     assert result_score <= start_score
+
+
+def test_local_search_repair_rejects_an_invalid_candidate_instead_of_returning_it(monkeypatch):
+    # Regression test for a real bug: _score hardcoded is_valid=True, so an
+    # invalid candidate (here: a RETRIEVE for a container not in the yard
+    # at all) looked artificially cheap (relocation_count=0, zero delay)
+    # instead of paying spec 11.3's M_inf penalty, and could win the
+    # hill-climbing walk outright. Force every sampled neighbor to be the
+    # same invalid plan and confirm local search never adopts it.
+    import sarcrp.local_search_repair as lsr_module
+    from sarcrp.plan_validator import is_plan_valid
+
+    state = make_state()
+    p_start = make_plan(dest="S2")
+    p_old = make_plan(dest="S3")
+    invalid_candidate = Plan(plan_id="bad", created_at=0, source="t", actions=[
+        Action(action_id="x0", step_index=0, type="RETRIEVE", container="DOES_NOT_EXIST",
+               source_stack="S1", dest_stack=None, commit_status="planned", planned_time=0),
+    ])
+    monkeypatch.setattr(lsr_module, "_sample_neighbor", lambda *a, **k: invalid_candidate)
+
+    result = local_search_repair(
+        p_start, p_old, state, retrieval_queue_new=["C1"], frozen_count=0, rng=random.Random(0),
+        t_iters=5, m_neighbors=3, epsilon=0.0,
+    )
+    assert is_plan_valid(result, state)
+    assert result is p_start  # the invalid candidate must never be adopted, regardless of its apparent cost
 
 
 def test_local_search_repair_can_reduce_urgent_retrieval_delay():

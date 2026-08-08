@@ -1,6 +1,6 @@
 import random
 from sarcrp.schemas import Layout, Stack, YardState, Action, Plan
-from sarcrp.sarcrp_core import replan, _build_c3
+from sarcrp.sarcrp_core import replan, _build_c3, _score_candidate
 
 
 def make_state(queue):
@@ -111,6 +111,25 @@ def test_build_c3_renumbers_step_index_sequentially_avoiding_collision():
     assert indices == [0, 1, 2]  # sequential, no collision
     assert c3.actions[0].container == "C1"  # frozen action preserved at index 0
     assert c3.actions[1].container == "X"  # tail's own first action now at index 1, not colliding with frozen's 0
+
+
+def test_score_candidate_penalizes_invalid_plans_instead_of_hardcoding_valid():
+    # Regression test for a real bug: is_valid was hardcoded True
+    # unconditionally, so a candidate that replays illegally (here: a
+    # RETRIEVE for a container that is not on top of its stack) looked
+    # artificially cheap (relocation_count=0, tiny delay) instead of
+    # paying spec 11.3's M_inf penalty -- meaning an invalid candidate
+    # could silently win candidate selection. Caught building a
+    # multi-urgent-container local-search operator whose destination
+    # choices could produce an invalid plan.
+    state = make_state(["C1", "C2", "C3"])  # S1=[C3,C2,C1], C1 on top
+    plan_old = make_plan()
+    invalid_plan = Plan(plan_id="bad", created_at=0, source="t", actions=[
+        Action(action_id="x0", step_index=0, type="RETRIEVE", container="C3",  # C3 is buried, not on top
+               source_stack="S1", dest_stack=None, commit_status="planned", planned_time=0),
+    ])
+    score = _score_candidate(invalid_plan, plan_old, frozen_count=0, urgent_containers=[], conf_new=1.0, state=state)
+    assert score >= 1e6  # spec 11's M_inf, not a small/normal-looking cost
 
 
 def test_replan_accepts_a_custom_solver():
