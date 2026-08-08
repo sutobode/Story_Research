@@ -63,10 +63,15 @@ def run_significance_tests(rows: list[dict], baseline_methods=("static", "full_r
         by_seed_baseline = {r["seed"]: r["total_cost_mean"] for r in rows if r["method"] == baseline}
         baseline_values = [by_seed_baseline[s] for s in seeds_sorted if s in by_seed_baseline]
         matched_sarcrp = [by_seed_sarcrp[s] for s in seeds_sorted if s in by_seed_baseline]
-        p_value = wilcoxon_signed_rank(matched_sarcrp, baseline_values)
+        wilcoxon_result = wilcoxon_signed_rank(matched_sarcrp, baseline_values)
         delta = cliffs_delta(matched_sarcrp, baseline_values)
-        raw_p_values.append(p_value)
-        per_baseline[baseline] = {"p_value": p_value, "cliffs_delta": delta}
+        raw_p_values.append(wilcoxon_result.p_value)
+        per_baseline[baseline] = {
+            "p_value": wilcoxon_result.p_value,
+            "n_pairs": wilcoxon_result.n_pairs,
+            "n_nonzero_pairs": wilcoxon_result.n_nonzero_pairs,
+            "cliffs_delta": delta,
+        }
 
     significant_flags = holm_bonferroni(raw_p_values)
     for baseline, flag in zip(baseline_methods, significant_flags):
@@ -92,17 +97,19 @@ def main():
     significance = run_significance_tests(rows)
     sig_path = results_dir / "experiment1_significance.csv"
     with sig_path.open("w", newline="") as f:
-        f.write("baseline,p_value,p_value_holm_significant,cliffs_delta\n")
+        f.write("baseline,p_value,n_pairs,n_nonzero_pairs,p_value_holm_significant,cliffs_delta\n")
         for baseline, stats_row in significance.items():
             if baseline == "_sarcrp_ci":
                 continue
-            f.write(f"{baseline},{stats_row['p_value']:.6f},{stats_row['p_value_holm_significant']},{stats_row['cliffs_delta']:.4f}\n")
+            f.write(f"{baseline},{stats_row['p_value']:.6f},{stats_row['n_pairs']},{stats_row['n_nonzero_pairs']},"
+                    f"{stats_row['p_value_holm_significant']},{stats_row['cliffs_delta']:.4f}\n")
     print(f"Wrote significance table to {sig_path}")
     for baseline, stats_row in significance.items():
         if baseline == "_sarcrp_ci":
             continue
         print(f"SAR-CRP vs {baseline}: p={stats_row['p_value']:.4f} "
-              f"(Holm-significant={stats_row['p_value_holm_significant']}), "
+              f"(n_nonzero_pairs={stats_row['n_nonzero_pairs']}/{stats_row['n_pairs']}, "
+              f"Holm-significant={stats_row['p_value_holm_significant']}), "
               f"Cliff's delta={stats_row['cliffs_delta']:.3f}")
 
 
