@@ -15,19 +15,21 @@ LAYOUT_FILES = {
     "layout_b": "layout_b.json",
     "layout_c": "layout_c.json",
 }
+TIMEOUT_BY_LAYOUT = {"layout_a": 1.0, "layout_b": 5.0, "layout_c": 30.0}  # spec 17: small/medium/large
 
 
 def run_all_layouts(methods=METHODS, seeds=SEEDS) -> list[dict]:
     """Cross-layout protocol (spec 50): every layout runs with the SAME
     hyperparameters (this codebase's spec-48 defaults) -- no per-layout
-    tuning happens anywhere in this function."""
+    tuning happens anywhere in this function. Only the solver timeout
+    varies, per spec 17's own size-based tiering (TIMEOUT_BY_LAYOUT)."""
     instances_dir = Path(__file__).parent / "instances"
     rows = []
     for layout_name, filename in LAYOUT_FILES.items():
         instance = json.loads((instances_dir / filename).read_text())
         for method in methods:
             for seed in seeds:
-                metrics = run_episode(instance, method_name=method, rng=random.Random(seed))
+                metrics = run_episode(instance, method_name=method, rng=random.Random(seed), time_limit_sec=TIMEOUT_BY_LAYOUT[layout_name])
                 rows.append({
                     "layout": layout_name, "method": method, "seed": seed,
                     "total_cost_mean": metrics.total_cost_mean,

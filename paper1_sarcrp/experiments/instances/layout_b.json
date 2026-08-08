@@ -8,7 +8,7 @@
     {"id": "S4", "containers": ["C12", "C07", "C02"], "max_tier": 5},
     {"id": "S5", "containers": ["C11", "C06"], "max_tier": 5}
   ],
-  "initial_retrieval_order": ["C01", "C02", "C03", "C04", "C05", "C06", "C07", "C08", "C09", "C10", "C11", "C12", "C13", "C14", "C15"],
+  "initial_retrieval_order": ["C15", "C14", "C13", "C12", "C11", "C10", "C09", "C08", "C07", "C06", "C05", "C04", "C03", "C02", "C01"],
   "t_steps": 40,
   "uncertainty_level": "medium"
 }

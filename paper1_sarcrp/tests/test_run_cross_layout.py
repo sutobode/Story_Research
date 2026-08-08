@@ -4,7 +4,7 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent / "experiments"))
-from run_cross_layout import run_all_layouts, summarize_performance_drop  # noqa: E402
+from run_cross_layout import run_all_layouts, summarize_performance_drop, TIMEOUT_BY_LAYOUT  # noqa: E402
 
 import pytest
 
@@ -13,6 +13,10 @@ def test_run_all_layouts_covers_all_three_layouts():
     rows = run_all_layouts(methods=("static", "sarcrp"), seeds=(0, 1))
     layouts = {r["layout"] for r in rows}
     assert layouts == {"layout_a", "layout_b", "layout_c"}
+
+
+def test_timeout_by_layout_matches_spec_17_tiers():
+    assert TIMEOUT_BY_LAYOUT == {"layout_a": 1.0, "layout_b": 5.0, "layout_c": 30.0}
 
 
 def test_summarize_performance_drop_reports_relative_change_from_layout_a():
