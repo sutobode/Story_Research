@@ -1,0 +1,10 @@
+{
+  "instance_id": "tiny_ground_truth",
+  "layout": {"num_stacks": 3, "max_tier": 4},
+  "stacks": [
+    {"id": "S1", "containers": ["C1", "C4"], "max_tier": 4},
+    {"id": "S2", "containers": ["C2", "C5"], "max_tier": 4},
+    {"id": "S3", "containers": ["C3", "C6"], "max_tier": 4}
+  ],
+  "initial_retrieval_order": ["C1", "C2", "C3", "C4", "C5", "C6"]
+}
