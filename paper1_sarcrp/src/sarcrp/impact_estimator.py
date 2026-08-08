@@ -54,12 +54,31 @@ def _target_impact(old_queue: list[str], new_queue: list[str]) -> float:
     return 1.0 if old_target != new_target else 0.0
 
 
-def _blocking_impact(state_old: YardState, state_new: YardState, top_k: list[str], sigma_b: float) -> float:
-    """I_blocking: saturated mean absolute blocker-count change over top-k (spec 8.4)."""
-    if not top_k:
+def _blocking_impact(
+    state_old: YardState, state_new: YardState, old_queue: list[str], new_queue: list[str],
+    k: int, sigma_b: float,
+) -> float:
+    """I_blocking: saturated mean absolute blocker-count change over
+    union(old_queue[:k], new_queue[:k]) (spec 8.4/44.3's own pseudocode --
+    the union, not new_queue's top-k alone, so a container that drops out
+    of the near-term window but whose physical blocker count still changed
+    is not silently missed).
+
+    NOTE: every call site in this codebase (sarcrp_core.replan,
+    sanity_checks.run_sanity_checks) currently passes the SAME state
+    object for both state_old and state_new, because Paper 1's simulator
+    never executes an action's physical effect onto state.stacks between
+    two impact estimations (commit_status never transitions to
+    "committed" anywhere in src/ -- see test_impact_estimator.py's
+    test_blocking_impact_is_zero_when_physical_state_is_unchanged). This
+    term is therefore always 0.0 in every experiment this suite has run;
+    giving it genuine signal needs a physical-execution model, which is
+    explicitly Paper 2's scope ("imperfect execution"), not Paper 1's."""
+    items = sorted(set(old_queue[:k]) | set(new_queue[:k]))
+    if not items:
         return 0.0
-    diffs = [abs(blocker_count(state_new, c) - blocker_count(state_old, c)) for c in top_k]
-    mean_delta = sum(diffs) / len(top_k)
+    diffs = [abs(blocker_count(state_new, c) - blocker_count(state_old, c)) for c in items]
+    mean_delta = sum(diffs) / len(items)
     return 1.0 - math.exp(-mean_delta / sigma_b)
 
 
@@ -103,7 +122,7 @@ def compute_impact(
     w = weights or DEFAULT_WEIGHTS
     i_order = _kendall_tau_topk(old_queue, new_queue, k)
     i_target = _target_impact(old_queue, new_queue)
-    i_blocking = _blocking_impact(state_old, state_new, new_queue[:k], sigma_b)
+    i_blocking = _blocking_impact(state_old, state_new, old_queue, new_queue, k, sigma_b)
     i_plan = _plan_impact(plan_old, old_queue, new_queue, state_new, r_shift)
     i_conf = 1.0 - conf_new
 

@@ -1,6 +1,6 @@
 import math
 from sarcrp.schemas import Layout, Stack, YardState, Action, Plan
-from sarcrp.impact_estimator import compute_impact, is_action_affected
+from sarcrp.impact_estimator import compute_impact, is_action_affected, _blocking_impact
 
 
 def make_state(retrieval_queue):
@@ -48,6 +48,69 @@ def test_is_action_affected_rank_shift_beyond_threshold():
     action = Action(action_id="a1", step_index=0, type="RELOCATE", container="C1",
                      source_stack="S1", dest_stack="S1", commit_status="planned", planned_time=1)
     assert is_action_affected(action, old_queue, new_queue, state, r_shift=0) is True
+
+
+def test_blocking_impact_is_zero_when_physical_state_is_unchanged():
+    # This is the only situation sarcrp_core.replan ever actually calls
+    # compute_impact under today (Paper 1's simulator never executes an
+    # action's physical effect onto state.stacks between events -- see
+    # docstring on _blocking_impact below), so this is the realistic case,
+    # not an edge case.
+    queue = ["C1", "C2", "C3", "C4", "C5"]
+    state = make_state(queue)
+    delta = _blocking_impact(state, state, queue, queue, k=5, sigma_b=2.0)
+    assert delta == 0.0
+
+
+def test_blocking_impact_is_nonzero_when_physical_state_genuinely_differs():
+    # Spec 44.3's own pseudocode compares B_old(c) vs B_new(c) -- a real
+    # physical blocker-count change -- over union(old_queue[:k], new_queue[:k]).
+    # C1 goes from 4 blockers (buried at the bottom of a 5-stack) to 0
+    # (alone, after the 4 containers above it were physically removed) --
+    # this models what *would* happen if Paper 2's execution layer had
+    # actually retrieved C2/C3/C4/C5 in between two impact estimations.
+    queue = ["C1", "C2"]
+    state_old = YardState(
+        instance_id="t", time_step=0, layout=Layout(num_stacks=1, max_tier=5),
+        stacks=[Stack(id="S1", containers=["C1", "C2", "C3", "C4", "C5"], max_tier=5)],  # C1 at bottom, 4 above it
+        container_attributes={}, retrieval_queue=queue,
+        pickup_prob={}, data_timestamp=0, state_confidence=1.0,
+    )
+    state_new = YardState(
+        instance_id="t", time_step=1, layout=Layout(num_stacks=1, max_tier=5),
+        stacks=[Stack(id="S1", containers=["C1"], max_tier=5)],  # C2-C5 physically retrieved
+        container_attributes={}, retrieval_queue=queue,
+        pickup_prob={}, data_timestamp=0, state_confidence=1.0,
+    )
+    delta = _blocking_impact(state_old, state_new, queue, queue, k=1, sigma_b=2.0)
+    assert delta > 0.0
+    assert math.isclose(delta, 1.0 - math.exp(-4 / 2.0), rel_tol=1e-9)  # top-1={C1}: |0-4|=4
+
+
+def test_blocking_impact_uses_the_union_of_old_and_new_top_k_not_new_alone():
+    # Spec 44.3: items = union(first K of old_queue, first K of new_queue).
+    # C5 sits in the OLD top-2 but drops out of the NEW top-2 entirely; if
+    # only new_queue's top-k were used, C5's real physical change (buried
+    # under 2 -> physically retrieved) would be silently missed even though
+    # C1/C2 (the only new-top-k members) saw no change at all.
+    old_queue = ["C5", "C1", "C2"]
+    new_queue = ["C1", "C2", "C3"]
+    state_old = YardState(
+        instance_id="t", time_step=0, layout=Layout(num_stacks=1, max_tier=5),
+        stacks=[Stack(id="S1", containers=["C5", "C1", "C2"], max_tier=5)],  # C5 bottom (2 above), C1 mid (1 above), C2 top (0)
+        container_attributes={}, retrieval_queue=old_queue,
+        pickup_prob={}, data_timestamp=0, state_confidence=1.0,
+    )
+    state_new = YardState(
+        instance_id="t", time_step=1, layout=Layout(num_stacks=1, max_tier=5),
+        stacks=[Stack(id="S1", containers=["C1", "C2"], max_tier=5)],  # C5 physically retrieved; C1/C2's own blocker counts unchanged
+        container_attributes={}, retrieval_queue=new_queue,
+        pickup_prob={}, data_timestamp=0, state_confidence=1.0,
+    )
+    delta_union = _blocking_impact(state_old, state_new, old_queue, new_queue, k=2, sigma_b=2.0)
+    delta_new_only = _blocking_impact(state_old, state_new, new_queue, new_queue, k=2, sigma_b=2.0)
+    assert delta_new_only == 0.0  # C1/C2 alone: no change at all
+    assert delta_union > 0.0  # union also picks up C5's real 2->0 change
 
 
 def test_is_action_affected_removed_container():
