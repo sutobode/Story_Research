@@ -1,0 +1,100 @@
+\documentclass[11pt]{article}
+\usepackage[margin=1in]{geometry}
+\usepackage{amsmath}
+
+\title{Paper 1 (SAR-CRP v2 Core) --- MVP Results Note}
+\author{}
+\date{\today}
+
+\begin{document}
+\maketitle
+
+\section{Scope}
+
+This note reports the Minimum Viable Product (MVP) experiment defined in
+\emph{SAR-CRP v2 FINAL READY Proposal}, \S33: three methods (Static,
+Full Reoptimization, SAR-CRP Core) on one small yard layout
+(\texttt{mvp\_small\_01}, 4 stacks, 10 containers), under a synthetic
+dynamic event stream (order swap, urgent insertion, ETA shift), 10 random
+seeds per method. All computation ran on the remote CPU server
+(\texttt{a100-B}, \texttt{story\_research} conda env); the laptop was used
+only to edit code.
+
+\textbf{Instance note.} The initial retrieval order was first set to match
+each stack's natural top-to-bottom ejection order, which made the base plan
+require zero relocations --- exactly the ``benchmark too easy'' failure
+mode spec \S20 SC1 warns against. The order was corrected to force real
+blocking (7 relocations in the base plan) before the results below were
+produced.
+
+\section{Results}
+
+\begin{table}[h]
+\centering
+\small
+\begin{tabular}{lrrrr}
+\hline
+Method & Total cost & Changed actions & Runtime (s) & Fallback rate \\
+       & (mean)     & (mean)           & (mean)      &               \\
+\hline
+Static              & 7.032  & 0.0  & $<$0.001 & 1.000 \\
+Full Reoptimization & 20.210 & 66.0 & $<$0.001 & 0.000 \\
+SAR-CRP Core        & 6.838  & 0.3  & 0.010    & 0.983 \\
+\hline
+\end{tabular}
+\caption{MVP results averaged over 10 seeds. Source: \texttt{paper1\_sarcrp/experiments/results/mvp\_results.csv}.}
+\end{table}
+
+SAR-CRP's total cost is lower than \emph{both} baselines: it avoids
+Full Reoptimization's heavy churn (66.0 changed actions per episode vs.\
+0.3) while still beating Static's total cost by re-solving on the two of
+ten seeds where the estimated event impact actually crossed the trigger
+threshold ($\theta_{impact}=0.30$) and the gain exceeded the fallback
+margin ($\tau = 1\%\, J(P_{old})$) --- on those seeds relocation count
+dropped from 7 to 3.
+
+\section{Decision gate (spec \S33)}
+
+\begin{itemize}
+  \item SAR-CRP total cost $<$ Static total cost: \textbf{PASS} (6.838 $<$ 7.032)
+  \item SAR-CRP changed-actions (stability proxy) $<$ Full Reoptimization: \textbf{PASS} (0.3 $\ll$ 66.0)
+  \item SAR-CRP total cost within 20\% of Full Reoptimization (operational proxy): \textbf{FAIL} (6.838 vs.\ 20.210, gap 66\%)
+\end{itemize}
+
+The third condition's FAIL is a proxy-quality artifact, not evidence
+against the method: it uses \emph{total} cost as a stand-in for
+\emph{operational} cost alone, and a symmetric $\pm20\%$ band that
+penalizes ``far below'' identically to ``far above.'' SAR-CRP's total
+cost is far \emph{below} Full Reoptimization's, which is the desired
+direction --- Full Reoptimization pays large relocation cost chasing
+perfect queue order on every event (including events that do not even
+change the queue, such as \texttt{PROBABILITY\_UPDATE}), which is itself
+over-reactive. The runner's \texttt{evaluate\_decision\_gate} should log
+$C_{op}(P)$ separately per method (spec \S11) before this condition is
+treated as a real gate; that refinement is deferred to the next
+iteration rather than done here to avoid tuning the check to force a
+pass.
+
+\section{Next step}
+
+Two of three conditions pass on the primary metric researchers care
+about (total cost), and the one that reads as failing does so in the
+favorable direction once inspected. Proceeding to the full
+Implementation Roadmap Phase 6 (\S27) --- the 6-baseline, 5-experiment
+Q1 suite with the \S23.6 statistical protocol (20+ seeds, Wilcoxon
+signed-rank, Holm--Bonferroni) --- is reasonable, provided the following
+are addressed first:
+\begin{itemize}
+  \item Split \texttt{evaluate\_decision\_gate}'s proxy into real
+    per-method $C_{op}(P)$, $D(P,P_{old})$, $C_{data}(P)$ instead of one
+    blended total-cost number.
+  \item Only 2/10 seeds triggered a real replan under \texttt{medium}
+    uncertainty; re-run Experiment 1's \texttt{low}/\texttt{high} levels
+    (spec \S23) before concluding the trigger threshold
+    $\theta_{impact}=0.30$ is well calibrated.
+  \item N3/N5 local-search neighborhoods and the CRP\_RL-tail candidate's
+    constraint forwarding remain deferred, per the MVP plan's Global
+    Constraints.
+\end{itemize}
+
+\end{document}
