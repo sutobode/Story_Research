@@ -78,3 +78,19 @@ def test_impact_weights_override_changes_impact_total():
                                      ["C3"], theta_impact=0.0, tau_frac=1.0, rng=random.Random(0),
                                      impact_weights={"w_o": 0.25, "w_t": 0.20, "w_b": 0.0, "w_p": 0.20, "w_c": 0.10})
     assert zero_blocking_decision.impact.total <= default_decision.impact.total
+
+
+def test_replan_accepts_a_custom_solver():
+    state = make_state(["C1", "C2", "C3"])
+    plan_old = make_plan()
+    calls = {"count": 0}
+
+    def spy_solver(state_arg, queue_arg, constraints=None, time_limit_sec=None):
+        calls["count"] += 1
+        from sarcrp.crp_solver import solve_crp
+        return solve_crp(state_arg, queue_arg, constraints=constraints, time_limit_sec=time_limit_sec)
+
+    decision = replan(state, plan_old, ["C1", "C2", "C3"], ["C3", "C2", "C1"], ["C3"],
+                       theta_impact=0.05, tau_frac=0.0, rng=random.Random(0), solver=spy_solver)
+    assert calls["count"] >= 1
+    assert decision.decision in {"KEEP", "UPDATE"}

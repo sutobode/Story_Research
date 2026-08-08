@@ -67,3 +67,16 @@ def test_mpc_receding_horizon_freezes_prefix_and_resolves_tail():
     ])
     result = mpc_receding_horizon(state, plan, retrieval_queue_new=["C2", "C1"], horizon=1)
     assert result.actions[0].container == plan.actions[0].container  # frozen prefix (1 action) untouched
+
+
+def test_full_reoptimization_accepts_a_custom_solver():
+    state = make_state(["C1", "C2"])
+    calls = {"count": 0}
+
+    def spy_solver(state_arg, queue_arg, constraints=None, time_limit_sec=None):
+        calls["count"] += 1
+        from sarcrp.crp_solver import solve_crp
+        return solve_crp(state_arg, queue_arg, constraints=constraints, time_limit_sec=time_limit_sec)
+
+    full_reoptimization(state, retrieval_queue_new=["C1", "C2"], time_limit_sec=1.0, solver=spy_solver)
+    assert calls["count"] == 1

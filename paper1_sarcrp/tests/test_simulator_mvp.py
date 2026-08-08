@@ -1,13 +1,15 @@
 import random
+from pathlib import Path
+import pytest
 from sarcrp.simulator import run_episode
 
 SMALL_INSTANCE = {
     "instance_id": "mvp_small_01",
-    "layout": {"num_stacks": 3, "max_tier": 5},
+    "layout": {"num_stacks": 3, "max_tier": 6},
     "stacks": [
-        {"id": "S1", "containers": ["C6", "C5", "C4", "C3", "C2", "C1"], "max_tier": 5},
-        {"id": "S2", "containers": [], "max_tier": 5},
-        {"id": "S3", "containers": [], "max_tier": 5},
+        {"id": "S1", "containers": ["C6", "C5", "C4", "C3", "C2", "C1"], "max_tier": 6},
+        {"id": "S2", "containers": [], "max_tier": 6},
+        {"id": "S3", "containers": [], "max_tier": 6},
     ],
     "initial_retrieval_order": ["C1", "C2", "C3", "C4", "C5", "C6"],
     "t_steps": 20,
@@ -107,4 +109,13 @@ def test_episode_metrics_reports_the_new_fields():
 
 def test_time_limit_sec_override_is_accepted():
     metrics = run_episode(SMALL_INSTANCE, method_name="static", rng=random.Random(0), time_limit_sec=1.0)
+    assert metrics.total_cost_mean >= 0.0
+
+
+@pytest.mark.skipif(
+    not Path(__file__).parent.parent.joinpath("external", "CRP_RL").is_dir(),
+    reason="CRP_RL not cloned (see external/README.md)",
+)
+def test_run_episode_supports_full_reopt_crp_rl_method():
+    metrics = run_episode(SMALL_INSTANCE, method_name="full_reopt_crp_rl", rng=random.Random(0))
     assert metrics.total_cost_mean >= 0.0

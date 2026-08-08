@@ -44,11 +44,15 @@ def replan(
     conf_new: float = 1.0,
     use_local_search: bool = True,
     impact_weights: dict | None = None,
+    solver=None,
 ) -> ReplanDecision:
     """Algorithm SAR-CRP v2 Core (spec 18), steps 1-9. use_local_search=False
     and impact_weights are ablation hooks (spec 25 A4, A6) -- not used by the
-    default SAR-CRP configuration."""
+    default SAR-CRP configuration. `solver` defaults to the greedy heuristic
+    and is used for candidate C3's tail (spec 43/33 -- pass
+    crp_rl_adapter.solve_crp_via_crp_rl to use the real trained model)."""
     rng = rng or random.Random()
+    active_solver = solver or solve_crp
 
     # Steps 1-2: confidence already folded into conf_new by the caller; estimate impact.
     impact = compute_impact(old_queue, new_queue, state_t, state_t, plan_old, conf_new=conf_new, weights=impact_weights)
@@ -72,7 +76,7 @@ def replan(
             urgent_containers=urgent_containers, conf_new=conf_new, time_limit_sec=time_limit_sec,
         )
         candidates.append(c2)
-    tail_solution = solve_crp(state_t, new_queue, time_limit_sec=time_limit_sec)
+    tail_solution = active_solver(state_t, new_queue, time_limit_sec=time_limit_sec)
     c3 = Plan(plan_id=f"{plan_old.plan_id}_c3", created_at=plan_old.created_at, source="frozen+crp_tail",
               actions=list(frozen.actions) + list(tail_solution.actions))
     candidates.append(c3)

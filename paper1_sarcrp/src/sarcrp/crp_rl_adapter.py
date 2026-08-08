@@ -8,6 +8,7 @@ blocker to), not its own travel-time cost model -- the resulting Plan is
 scored by this project's own objective.py, per spec 43."""
 
 import argparse
+import functools
 import sys
 from pathlib import Path
 
@@ -87,6 +88,16 @@ def _load_model(model_path: str, device: torch.device):
     return model
 
 
+@functools.lru_cache(maxsize=4)
+def get_cached_model(model_path: str, device: str):
+    """Loads the checkpoint once per (model_path, device) pair and reuses it
+    -- solve_crp_via_crp_rl previously re-read the checkpoint from disk on
+    every single call, which is fine for a one-off smoke test but would make
+    any experiment calling it hundreds/thousands of times (Experiment-1
+    scale) dominated by disk I/O instead of actual inference."""
+    return _load_model(model_path, torch.device(device))
+
+
 def _run_decode_recording_moves(model, x: torch.Tensor) -> list[tuple[int, int]]:
     import model.decoder as decoder_module
 
@@ -160,14 +171,21 @@ def moves_to_plan(yard_state: YardState, retrieval_queue: list[str], moves: list
 def solve_crp_via_crp_rl(
     yard_state: YardState,
     retrieval_queue: list[str],
+    constraints: dict | None = None,
+    time_limit_sec: float | None = None,
     model_path: str = "baselines/models/proposed/epoch(100).pt",
     device: str = "cpu",
 ) -> Plan:
-    """Real CRP_RL inference: loads the pretrained checkpoint, runs its decode
-    loop on this single instance, and translates the resulting relocation
-    sequence back into our Plan/Action schema (spec 43's solve_crp interface)."""
+    """Real CRP_RL inference: loads the pretrained checkpoint (cached after
+    the first call, see get_cached_model), runs its decode loop on this
+    single instance, and translates the resulting relocation sequence back
+    into our Plan/Action schema (spec 43's solve_crp interface). `constraints`
+    and `time_limit_sec` are accepted (both currently unused -- the model's
+    decode loop has a fixed step bound, not a wall-clock budget) purely so
+    this function is signature-compatible with solve_crp and can be passed
+    as full_reoptimization's/replan's `solver` callable interchangeably."""
     _ensure_crp_rl_on_path()
-    model = _load_model(model_path, torch.device(device))
+    model = get_cached_model(model_path, device)
     x = build_priority_tensor(yard_state, retrieval_queue).to(torch.device(device))
     moves = _run_decode_recording_moves(model, x)
     return moves_to_plan(yard_state, retrieval_queue, moves)

@@ -74,3 +74,11 @@ def test_solve_crp_via_crp_rl_returns_a_valid_plan():
     # Every container must be retrieved in non-decreasing rank order.
     rank = {"C1": 0, "C2": 1, "C3": 2, "C4": 3}
     assert [rank[c] for c in retrieved] == sorted(rank[c] for c in retrieved)
+
+
+@pytest.mark.skipif(not CRP_RL_ROOT.is_dir(), reason="CRP_RL not cloned (see external/README.md)")
+def test_get_cached_model_returns_the_same_object_on_repeated_calls():
+    from sarcrp.crp_rl_adapter import get_cached_model
+    model_a = get_cached_model("baselines/models/proposed/epoch(100).pt", "cpu")
+    model_b = get_cached_model("baselines/models/proposed/epoch(100).pt", "cpu")
+    assert model_a is model_b

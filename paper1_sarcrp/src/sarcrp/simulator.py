@@ -7,6 +7,7 @@ from sarcrp.baselines import (
     event_triggered_no_stability, full_reoptimization, mpc_receding_horizon,
     periodic_replan, static_plan,
 )
+from sarcrp.crp_rl_adapter import solve_crp_via_crp_rl
 from sarcrp.crp_solver import solve_crp
 from sarcrp.event_generator import generate_event_stream
 from sarcrp.objective import compute_objective, data_confidence_cost, operational_cost, relocation_count, stability_cost
@@ -87,6 +88,9 @@ def run_episode(
             fallback = True
         elif method_name == "full_reopt":
             new_plan = full_reoptimization(state, new_queue, time_limit_sec=time_limit_sec)
+            fallback = False
+        elif method_name == "full_reopt_crp_rl":
+            new_plan = full_reoptimization(state, new_queue, time_limit_sec=time_limit_sec, solver=solve_crp_via_crp_rl)
             fallback = False
         elif method_name == "sarcrp":
             decision = replan(state, plan, queue, new_queue, urgent, rng=rng, conf_new=event.confidence,

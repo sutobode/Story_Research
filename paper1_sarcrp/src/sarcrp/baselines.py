@@ -11,9 +11,13 @@ def static_plan(plan_initial: Plan) -> Plan:
     return plan_initial
 
 
-def full_reoptimization(state_t, retrieval_queue_new: list[str], constraints: dict | None = None, time_limit_sec: float = 5.0) -> Plan:
-    """B2 (spec 22): re-solve the whole remaining problem on every event."""
-    return solve_crp(state_t, retrieval_queue_new, constraints=constraints, time_limit_sec=time_limit_sec)
+def full_reoptimization(state_t, retrieval_queue_new: list[str], constraints: dict | None = None, time_limit_sec: float = 5.0, solver=None) -> Plan:
+    """B2 (spec 22): re-solve the whole remaining problem on every event.
+    `solver` defaults to the greedy heuristic (spec 43's CRP_RL surrogate,
+    Task 7); pass `crp_rl_adapter.solve_crp_via_crp_rl` to use the real
+    trained model instead (Task 19/33)."""
+    active_solver = solver or solve_crp
+    return active_solver(state_t, retrieval_queue_new, constraints=constraints, time_limit_sec=time_limit_sec)
 
 
 def periodic_replan(
