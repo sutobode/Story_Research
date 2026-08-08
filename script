@@ -1,0 +1,15 @@
+#!/bin/bash
+#SBATCH --job-name=paper1-sarcrp        # đổi tên job cho dễ nhận diện trên squeue
+#SBATCH --nodes=1                     # số node
+#SBATCH --gpus-per-node=1             # số GPU mỗi node
+#SBATCH --ntasks=1
+#SBATCH --cpus-per-task=24            # số CPU core được cấp
+#SBATCH --time=3-00:20:00             # thời gian tối đa job được chạy (3 ngày 20 phút)
+
+nvidia-smi
+echo "-----------------------------"
+
+python paper1_sarcrp/experiments/run_mvp.py
+
+echo "-----------------------------"
+echo "Exit worker node"

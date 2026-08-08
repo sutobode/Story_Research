@@ -1,0 +1,32 @@
+# Real infra credentials (real IP/username) -- the file itself says never to
+# post this publicly (repo public, gist, forum...). Keep it local-only.
+SSH_A100_Setup_Runbook.md
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+build/
+dist/
+
+# LaTeX build artifacts (writeups/*/main.pdf itself is NOT ignored -- keep the
+# compiled report reviewable on GitHub; only the intermediate junk is ignored)
+*.aux
+*.log
+*.toc
+*.out
+*.fls
+*.fdb_latexmk
+*.synctex.gz
+*.bbl
+*.blg
+*.bcf
+*.run.xml
+
+# Slurm job logs (matched by *.out above) and experiment result artifacts
+paper1_sarcrp/experiments/results/
+
+# OS / editor junk
+.DS_Store
+Thumbs.db
