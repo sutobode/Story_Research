@@ -41,3 +41,57 @@ def test_operational_cost_mean_is_separate_from_total_cost():
     metrics = run_episode(SMALL_INSTANCE, method_name="full_reopt", rng=random.Random(2))
     assert metrics.operational_cost_mean >= 0.0
     assert isinstance(metrics.operational_cost_mean, float)
+
+
+def test_run_episode_supports_periodic_method():
+    metrics = run_episode(SMALL_INSTANCE, method_name="periodic", rng=random.Random(0))
+    assert metrics.total_cost_mean >= 0.0
+
+
+def test_run_episode_supports_event_triggered_no_stability_method():
+    metrics = run_episode(SMALL_INSTANCE, method_name="event_triggered_no_stability", rng=random.Random(0))
+    assert metrics.total_cost_mean >= 0.0
+
+
+def test_run_episode_supports_mpc_method():
+    metrics = run_episode(SMALL_INSTANCE, method_name="mpc", rng=random.Random(0))
+    assert metrics.total_cost_mean >= 0.0
+
+
+def test_run_episode_supports_ablation_methods():
+    for ablation_method in ("sarcrp_A1_no_trigger", "sarcrp_A3_no_stability", "sarcrp_A6_no_blocking_impact"):
+        metrics = run_episode(SMALL_INSTANCE, method_name=ablation_method, rng=random.Random(0))
+        assert metrics.total_cost_mean >= 0.0
+
+
+def test_run_episode_rejects_unknown_method():
+    try:
+        run_episode(SMALL_INSTANCE, method_name="not_a_method", rng=random.Random(0))
+        assert False, "expected ValueError"
+    except ValueError:
+        pass
+
+
+def test_run_episode_threads_h_f_and_lam_into_replan(monkeypatch):
+    # A behavioral difference is NOT a reliable signal here: Task 26's SC4
+    # finding (mean impact=0.090, well under the trigger threshold 0.30)
+    # means most random event streams never even reach a real UPDATE
+    # decision, blocking-instance or not -- 30 seeds of BLOCKING_INSTANCE
+    # (genuine physical blocking, high uncertainty) produced zero
+    # observable differences for either h_f or lam. That is a benchmark
+    # calibration fact (already reported in Task 26), not evidence the
+    # override is broken. So verify the plumbing directly: spy on
+    # sarcrp_core.replan and assert run_episode actually calls it with the
+    # h_f/lam values it was given.
+    import sarcrp.simulator as simulator_module
+    original_replan = simulator_module.replan
+    captured = {}
+
+    def spy_replan(*args, **kwargs):
+        captured.update(kwargs)
+        return original_replan(*args, **kwargs)
+
+    monkeypatch.setattr(simulator_module, "replan", spy_replan)
+    run_episode(SMALL_INSTANCE, method_name="sarcrp", rng=random.Random(0), h_f=2, lam=0.3)
+    assert captured.get("h_f") == 2
+    assert captured.get("lam") == 0.3
