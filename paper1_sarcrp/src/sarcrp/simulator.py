@@ -10,6 +10,7 @@ from sarcrp.baselines import (
 from sarcrp.crp_solver import solve_crp
 from sarcrp.event_generator import generate_event_stream
 from sarcrp.objective import compute_objective, data_confidence_cost, operational_cost, relocation_count, stability_cost
+from sarcrp.plan_validator import is_plan_valid
 from sarcrp.sarcrp_core import replan
 from sarcrp.schemas import Layout, Stack, YardState
 
@@ -20,8 +21,12 @@ class EpisodeMetrics:
     changed_actions_total: int
     total_cost_mean: float
     operational_cost_mean: float
+    stability_cost_mean: float
     runtime_mean_sec: float
+    runtime_p95_sec: float
     fallback_rate: float
+    invalid_rate: float
+    timeout_rate: float
 
 
 def _build_state(instance: dict, retrieval_queue: list[str]) -> YardState:
@@ -46,18 +51,24 @@ def _plan_changed_count(plan_a, plan_b) -> int:
     )
 
 
-def run_episode(instance: dict, method_name: str, rng: random.Random, h_f: int | None = None, lam: float | None = None) -> EpisodeMetrics:
+def run_episode(
+    instance: dict, method_name: str, rng: random.Random,
+    h_f: int | None = None, lam: float | None = None, time_limit_sec: float = 5.0,
+) -> EpisodeMetrics:
     queue = list(instance["initial_retrieval_order"])
     state = _build_state(instance, queue)
-    plan = solve_crp(state, queue, time_limit_sec=5.0)
+    plan = solve_crp(state, queue, time_limit_sec=time_limit_sec)
 
     events = generate_event_stream(queue, instance["t_steps"], instance["uncertainty_level"], rng)
 
     total_costs = []
     op_costs = []
+    stab_costs = []
     runtimes = []
     changed_actions_total = 0
     fallback_count = 0
+    invalid_flags = []
+    timeout_flags = []
 
     for event in events:
         new_queue = event.new_queue
@@ -75,22 +86,24 @@ def run_episode(instance: dict, method_name: str, rng: random.Random, h_f: int |
             new_plan = static_plan(plan)
             fallback = True
         elif method_name == "full_reopt":
-            new_plan = full_reoptimization(state, new_queue, time_limit_sec=5.0)
+            new_plan = full_reoptimization(state, new_queue, time_limit_sec=time_limit_sec)
             fallback = False
         elif method_name == "sarcrp":
-            decision = replan(state, plan, queue, new_queue, urgent, rng=rng, conf_new=event.confidence, **replan_kwargs)
+            decision = replan(state, plan, queue, new_queue, urgent, rng=rng, conf_new=event.confidence,
+                               time_limit_sec=time_limit_sec, **replan_kwargs)
             new_plan = decision.plan
             fallback = decision.decision == "KEEP"
         elif method_name == "periodic":
-            new_plan = periodic_replan(state, new_queue, plan, event_index=len(total_costs) + 1, time_limit_sec=5.0)
+            new_plan = periodic_replan(state, new_queue, plan, event_index=len(total_costs) + 1, time_limit_sec=time_limit_sec)
             fallback = new_plan is plan
         elif method_name == "event_triggered_no_stability":
             no_stability_kwargs = {k: v for k, v in replan_kwargs.items() if k == "h_f"}  # lam is fixed at 0 by definition
-            decision = event_triggered_no_stability(state, plan, queue, new_queue, urgent, rng, conf_new=event.confidence, **no_stability_kwargs)
+            decision = event_triggered_no_stability(state, plan, queue, new_queue, urgent, rng, conf_new=event.confidence,
+                                                      time_limit_sec=time_limit_sec, **no_stability_kwargs)
             new_plan = decision.plan
             fallback = decision.decision == "KEEP"
         elif method_name == "mpc":
-            new_plan = mpc_receding_horizon(state, plan, new_queue, time_limit_sec=5.0)
+            new_plan = mpc_receding_horizon(state, plan, new_queue, time_limit_sec=time_limit_sec)
             fallback = False
         elif method_name.startswith("sarcrp_") and method_name[len("sarcrp_"):] in ABLATIONS:
             ablation_name = method_name[len("sarcrp_"):]
@@ -105,23 +118,34 @@ def run_episode(instance: dict, method_name: str, rng: random.Random, h_f: int |
         if fallback:
             fallback_count += 1
 
-        op = operational_cost(new_plan, urgent, is_valid=True)
+        is_valid = is_plan_valid(new_plan, state)
+        invalid_flags.append(not is_valid)
+        timeout_flags.append(runtime >= time_limit_sec * 0.95)
+
+        op = operational_cost(new_plan, urgent, is_valid=is_valid)
         stab, violated = stability_cost(new_plan, plan, frozen_count=0)
         data = data_confidence_cost(new_plan, plan, event.confidence)
         j = compute_objective(op, 0.0 if violated else stab, data)
         total_costs.append(j)
         op_costs.append(op)
+        stab_costs.append(0.0 if violated else stab)
         runtimes.append(runtime)
 
         plan = new_plan
         queue = new_queue
 
     denom = max(len(events), 1)
+    runtimes_sorted = sorted(runtimes)
+    p95_index = min(int(0.95 * len(runtimes_sorted)), len(runtimes_sorted) - 1) if runtimes_sorted else 0
     return EpisodeMetrics(
         relocation_count_total=relocation_count(plan),
         changed_actions_total=changed_actions_total,
         total_cost_mean=sum(total_costs) / len(total_costs) if total_costs else 0.0,
         operational_cost_mean=sum(op_costs) / len(op_costs) if op_costs else 0.0,
+        stability_cost_mean=sum(stab_costs) / len(stab_costs) if stab_costs else 0.0,
         runtime_mean_sec=sum(runtimes) / len(runtimes) if runtimes else 0.0,
+        runtime_p95_sec=runtimes_sorted[p95_index] if runtimes_sorted else 0.0,
         fallback_rate=fallback_count / denom if denom else 0.0,
+        invalid_rate=sum(invalid_flags) / len(invalid_flags) if invalid_flags else 0.0,
+        timeout_rate=sum(timeout_flags) / len(timeout_flags) if timeout_flags else 0.0,
     )

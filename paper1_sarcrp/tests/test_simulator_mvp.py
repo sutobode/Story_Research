@@ -95,3 +95,16 @@ def test_run_episode_threads_h_f_and_lam_into_replan(monkeypatch):
     run_episode(SMALL_INSTANCE, method_name="sarcrp", rng=random.Random(0), h_f=2, lam=0.3)
     assert captured.get("h_f") == 2
     assert captured.get("lam") == 0.3
+
+
+def test_episode_metrics_reports_the_new_fields():
+    metrics = run_episode(SMALL_INSTANCE, method_name="sarcrp", rng=random.Random(0))
+    assert metrics.stability_cost_mean >= 0.0
+    assert 0.0 <= metrics.invalid_rate <= 1.0
+    assert 0.0 <= metrics.timeout_rate <= 1.0
+    assert metrics.runtime_p95_sec >= 0.0
+
+
+def test_time_limit_sec_override_is_accepted():
+    metrics = run_episode(SMALL_INSTANCE, method_name="static", rng=random.Random(0), time_limit_sec=1.0)
+    assert metrics.total_cost_mean >= 0.0

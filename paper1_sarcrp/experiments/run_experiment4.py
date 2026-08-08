@@ -55,11 +55,16 @@ def _run_one(instance: dict, method_name: str, fixed_confidence: float, rng: ran
 
         plan, queue = new_plan, new_queue
 
+    # stability_cost_mean/runtime_p95_sec/invalid_rate/timeout_rate are not
+    # tracked by this script's own loop (it reimplements run_episode's loop
+    # rather than reusing it, to pin confidence per-event) -- 0.0 here only,
+    # never cited as a real value in the report.
     return EpisodeMetrics(
         relocation_count_total=relocation_count(plan), changed_actions_total=changed_total,
         total_cost_mean=sum(total_costs) / len(total_costs) if total_costs else 0.0,
         operational_cost_mean=sum(op_costs) / len(op_costs) if op_costs else 0.0,
-        runtime_mean_sec=0.0, fallback_rate=0.0,
+        stability_cost_mean=0.0, runtime_mean_sec=0.0, runtime_p95_sec=0.0,
+        fallback_rate=0.0, invalid_rate=0.0, timeout_rate=0.0,
     )
 
 
