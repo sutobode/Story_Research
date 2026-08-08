@@ -3,10 +3,12 @@ import json
 import random
 import statistics
 import sys
+import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 from sarcrp.simulator import run_episode  # noqa: E402
+from sarcrp.run_logging import log_run  # noqa: E402
 
 METHODS = ("static", "full_reopt", "sarcrp")
 SEEDS = tuple(range(10))  # MVP smoke test: 10 seeds. Full study uses >=20 (spec 23.6).
@@ -67,6 +69,7 @@ def evaluate_decision_gate(rows: list[dict]) -> dict:
 
 
 def main():
+    _start = time.monotonic()
     instance_path = Path(__file__).parent / "instances" / "small_layout_mvp.json"
     instance = json.loads(instance_path.read_text())
 
@@ -86,6 +89,8 @@ def main():
         print(f"Decision gate (spec 33) -- uncertainty_level={level}:")
         for key, passed in verdict.items():
             print(f"  {key}: {'PASS' if passed else 'FAIL'}")
+
+    log_run("run_mvp.py", {"seeds": list(SEEDS), "methods": list(METHODS)}, time.monotonic() - _start, [str(out_path)])
 
 
 if __name__ == "__main__":

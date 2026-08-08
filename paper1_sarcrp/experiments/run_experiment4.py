@@ -2,6 +2,7 @@ import csv
 import json
 import random
 import sys
+import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
@@ -12,6 +13,7 @@ from sarcrp.baselines import static_plan, full_reoptimization  # noqa: E402
 from sarcrp.sarcrp_core import replan  # noqa: E402
 from sarcrp.objective import compute_objective, data_confidence_cost, operational_cost, relocation_count, stability_cost  # noqa: E402
 from sarcrp.seed_policy import REPORT_SEEDS as SEEDS  # noqa: E402
+from sarcrp.run_logging import log_run  # noqa: E402
 
 CONFIDENCE_LEVELS = (1.0, 0.7, 0.4, 0.2)  # spec 23 Experiment 4
 
@@ -83,6 +85,7 @@ def run_confidence_sweep(instance: dict, methods=("static", "full_reopt", "sarcr
 
 
 def main():
+    _start = time.monotonic()
     instance = json.loads((Path(__file__).parent / "instances" / "small_layout_mvp.json").read_text())
     rows = run_confidence_sweep(instance)
     results_dir = Path(__file__).parent / "results"
@@ -93,6 +96,9 @@ def main():
         writer.writeheader()
         writer.writerows(rows)
     print(f"Wrote {len(rows)} rows to {out_path}")
+
+    log_run("run_experiment4.py", {"seeds": list(SEEDS), "confidence_levels": list(CONFIDENCE_LEVELS)},
+            time.monotonic() - _start, [str(out_path)])
 
 
 if __name__ == "__main__":

@@ -1,5 +1,6 @@
 __pycache__/
 *.pyc
 experiments/results/
+experiments/logs/
 external/*
 !external/README.md

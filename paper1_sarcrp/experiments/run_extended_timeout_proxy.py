@@ -1,11 +1,13 @@
 import json
 import sys
+import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 from sarcrp.baselines import full_reoptimization  # noqa: E402
 from sarcrp.objective import relocation_count  # noqa: E402
 from sarcrp.schemas import Layout, Stack, YardState  # noqa: E402
+from sarcrp.run_logging import log_run  # noqa: E402
 
 
 def _build_state(instance: dict) -> YardState:
@@ -36,6 +38,7 @@ def run_proxy_comparison(instance: dict, normal_timeout: float, extended_timeout
 
 
 def main():
+    _start = time.monotonic()
     instances_dir = Path(__file__).parent / "instances"
     for layout_name, filename, normal_timeout in (("layout_b", "layout_b.json", 5.0), ("layout_c", "layout_c.json", 30.0)):
         instance = json.loads((instances_dir / filename).read_text())
@@ -43,6 +46,8 @@ def main():
         print(f"{layout_name}: normal={result['normal_timeout_relocations']} "
               f"offline_proxy={result['offline_proxy_relocations']} "
               f"gap_vs_proxy={result['gap_vs_proxy']:.1%}")
+
+    log_run("run_extended_timeout_proxy.py", {"extended_timeout": 300.0}, time.monotonic() - _start, [])
 
 
 if __name__ == "__main__":

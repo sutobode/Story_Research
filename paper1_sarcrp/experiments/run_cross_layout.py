@@ -3,11 +3,13 @@ import json
 import random
 import statistics
 import sys
+import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 from sarcrp.simulator import run_episode  # noqa: E402
 from sarcrp.seed_policy import REPORT_SEEDS as SEEDS  # noqa: E402
+from sarcrp.run_logging import log_run  # noqa: E402
 
 METHODS = ("static", "full_reopt", "sarcrp")
 LAYOUT_FILES = {
@@ -55,6 +57,7 @@ def summarize_performance_drop(rows: list[dict], method: str) -> dict:
 
 
 def main():
+    _start = time.monotonic()
     rows = run_all_layouts()
     results_dir = Path(__file__).parent / "results"
     results_dir.mkdir(exist_ok=True)
@@ -67,6 +70,9 @@ def main():
     for method in METHODS:
         drop = summarize_performance_drop(rows, method)
         print(f"{method}: performance drop vs layout_a -> B: {drop['layout_b']:+.1%}, C: {drop['layout_c']:+.1%}")
+
+    log_run("run_cross_layout.py", {"seeds": list(SEEDS), "methods": list(METHODS), "timeout_by_layout": TIMEOUT_BY_LAYOUT},
+            time.monotonic() - _start, [str(out_path)])
 
 
 if __name__ == "__main__":

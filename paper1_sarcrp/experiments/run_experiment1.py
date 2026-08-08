@@ -3,12 +3,14 @@ import json
 import random
 import statistics
 import sys
+import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 from sarcrp.simulator import run_episode  # noqa: E402
 from sarcrp.stats import bootstrap_ci, cliffs_delta, holm_bonferroni, wilcoxon_signed_rank  # noqa: E402
 from sarcrp.seed_policy import REPORT_SEEDS as SEEDS  # noqa: E402
+from sarcrp.run_logging import log_run  # noqa: E402
 
 METHODS = ("static", "full_reopt", "periodic", "event_triggered_no_stability", "mpc", "sarcrp")
 FACTOR_GRID = {
@@ -82,6 +84,7 @@ def run_significance_tests(rows: list[dict], baseline_methods=("static", "full_r
 
 
 def main():
+    _start = time.monotonic()
     instance = json.loads((Path(__file__).parent / "instances" / "small_layout_mvp.json").read_text())
     rows = run_factorial(instance)
 
@@ -111,6 +114,9 @@ def main():
               f"(n_nonzero_pairs={stats_row['n_nonzero_pairs']}/{stats_row['n_pairs']}, "
               f"Holm-significant={stats_row['p_value_holm_significant']}), "
               f"Cliff's delta={stats_row['cliffs_delta']:.3f}")
+
+    log_run("run_experiment1.py", {"seeds": list(SEEDS), "factor_grid": FACTOR_GRID, "methods": list(METHODS)},
+            time.monotonic() - _start, [str(out_path), str(sig_path)])
 
 
 if __name__ == "__main__":

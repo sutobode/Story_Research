@@ -1,5 +1,6 @@
 import json
 import sys
+import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
@@ -7,6 +8,7 @@ from sarcrp.crp_solver import solve_crp  # noqa: E402
 from sarcrp.ground_truth import exhaustive_solve  # noqa: E402
 from sarcrp.objective import relocation_count  # noqa: E402
 from sarcrp.schemas import Layout, Stack, YardState  # noqa: E402
+from sarcrp.run_logging import log_run  # noqa: E402
 
 
 def _build_state(instance: dict) -> YardState:
@@ -43,11 +45,14 @@ def run_comparison(instance: dict, max_containers: int = 8) -> dict:
 
 
 def main():
+    _start = time.monotonic()
     instance = json.loads((Path(__file__).parent / "instances" / "tiny_ground_truth.json").read_text())
     result = run_comparison(instance)
     print(f"Optimal relocations:  {result['optimal_relocations']}")
     print(f"Greedy relocations:   {result['greedy_relocations']}")
     print(f"Greedy optimality gap: {result['greedy_gap']:.1%}")
+
+    log_run("run_ground_truth_comparison.py", {"instance": "tiny_ground_truth.json"}, time.monotonic() - _start, [])
 
 
 if __name__ == "__main__":
