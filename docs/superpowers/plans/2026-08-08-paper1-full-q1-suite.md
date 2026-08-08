@@ -76,6 +76,26 @@ paper1_sarcrp/
     test_crp_rl_adapter.py           # MODIFY again (Task 33: cache test)
 ```
 
+**Additional files from Task 34 (rigor and logging — seed policy, Wilcoxon zero-handling, CRP\_RL-scale fairness, structured logs, Slurm submission):**
+```
+paper1_sarcrp/
+  src/sarcrp/
+    seed_policy.py             # NEW: DEV_SEEDS (0-9, already inspected) / REPORT_SEEDS (20-39, fresh)
+    run_logging.py              # NEW: log_run(...) -> appends to experiments/logs/run_log.jsonl
+    stats.py                     # MODIFY again: wilcoxon_signed_rank returns WilcoxonResult (p_value, n_pairs, n_nonzero_pairs), zero_method="pratt"
+  tests/
+    test_run_logging.py          # NEW
+    test_stats.py                  # MODIFY again
+  experiments/
+    instances/
+      generate_crp_rl_scale_instance.py  # NEW: deterministic generator, run once
+      crp_rl_scale_instance.json           # NEW: its output, 50 containers (inside CRP_RL's trained 35-70 range)
+    run_experiment1.py, run_cross_layout.py, run_experiment4.py, run_mvp.py,
+    run_sanity_report.py, run_ground_truth_comparison.py, run_extended_timeout_proxy.py
+                                             # MODIFY all seven: call log_run(...) at the end of main()
+    .gitignore                              # MODIFY: add experiments/logs/
+```
+
 **Interfaces locked now (do not rename later):**
 - `baselines.periodic_replan(state, retrieval_queue_new, plan_current, event_index, period=5, time_limit_sec=5.0) -> Plan`
 - `baselines.event_triggered_no_stability(state, plan_old, old_queue, new_queue, urgent_containers, rng, theta_impact=0.30, tau_frac=0.01, time_limit_sec=5.0, conf_new=1.0) -> ReplanDecision`
@@ -955,7 +975,7 @@ Expected: PASS (2 tests)
 - [ ] **Step 7: Run the real cross-layout experiment**
 
 Run: `python experiments/run_cross_layout.py`
-Expected: prints row count and a performance-drop line per method. Record the actual numbers for the final report (Task 34) -- do not fabricate them here.
+Expected: prints row count and a performance-drop line per method. Record the actual numbers for the final report (Task 35) -- do not fabricate them here.
 
 - [ ] **Step 8: Commit**
 
@@ -1164,7 +1184,7 @@ Expected: PASS (2 tests)
 - [ ] **Step 9: Run the real Experiment 4**
 
 Run: `python experiments/run_experiment4.py`
-Expected: prints row count. Inspect `results/experiment4_results.csv` afterward: spec 23's actual research question is "does SAR-CRP change the plan less as confidence drops?" -- compare `changed_actions_total` across the four confidence levels for `method=sarcrp` when writing the final report (Task 34).
+Expected: prints row count. Inspect `results/experiment4_results.csv` afterward: spec 23's actual research question is "does SAR-CRP change the plan less as confidence drops?" -- compare `changed_actions_total` across the four confidence levels for `method=sarcrp` when writing the final report (Task 35).
 
 - [ ] **Step 10: Commit**
 
@@ -1291,7 +1311,7 @@ def run_sanity_checks(instance: dict, seeds: tuple = tuple(range(10))) -> Sanity
 - [ ] **Step 4: Run to verify it passes**
 
 Run: `pytest tests/test_sanity_checks.py -v`
-Expected: PASS (1 test) -- **note the SC1/SC2/SC4 boolean fields may come back False on the current MVP instance/parameters; that is a real finding to report (Task 34), not a test failure to chase**, since the test only asserts the report's *shape*, not that every check passes.
+Expected: PASS (1 test) -- **note the SC1/SC2/SC4 boolean fields may come back False on the current MVP instance/parameters; that is a real finding to report (Task 35), not a test failure to chase**, since the test only asserts the report's *shape*, not that every check passes.
 
 - [ ] **Step 5: Write the report script**
 
@@ -1321,7 +1341,7 @@ if __name__ == "__main__":
 - [ ] **Step 6: Run the real sanity report**
 
 Run: `python experiments/run_sanity_report.py`
-Expected: prints 4 lines. Record the actual PASS/FAIL and numbers for Task 34's report -- do not adjust event-generator defaults just to force a PASS here without saying so in the paper.
+Expected: prints 4 lines. Record the actual PASS/FAIL and numbers for Task 35's report -- do not adjust event-generator defaults just to force a PASS here without saying so in the paper.
 
 - [ ] **Step 7: Commit**
 
@@ -1674,7 +1694,7 @@ Expected: PASS (4 tests)
 - [ ] **Step 5: Run the real Experiment 1**
 
 Run: `python experiments/run_experiment1.py` — this runs 3×3×3 grid points × 6 methods × 20 seeds = 3,240 episodes; time it first (`time python experiments/run_experiment1.py`) since it is by far the longest-running command in this plan, and if it exceeds a few minutes, run it with `run_in_background`-equivalent (`nohup ... &` over SSH) rather than blocking the session.
-Expected: writes both CSVs, prints one significance line per baseline. Record the actual p-values/effect sizes for Task 34 -- these are the headline numbers for the paper's Results section.
+Expected: writes both CSVs, prints one significance line per baseline. Record the actual p-values/effect sizes for Task 35 -- these are the headline numbers for the paper's Results section.
 
 - [ ] **Step 6: Commit**
 
@@ -1877,7 +1897,7 @@ Expected: PASS (13 tests: 11 existing + 2 new)
 Run: `pytest -v`
 Expected: PASS -- every other test that constructs or reads `EpisodeMetrics` must still pass; if any test destructures `EpisodeMetrics` by position instead of by attribute name, fix it to use attribute access (none currently do, per Tasks 13-28's code, but re-check `run_experiment4.py`'s `_run_one`, which builds an `EpisodeMetrics` by hand -- it must supply all 10 fields now, not the original 6).
 
-Update `run_experiment4.py`'s `_run_one` (Task 25) return statement to supply the four new fields (`stability_cost_mean=sum(...)/... `, `runtime_p95_sec=0.0`, `invalid_rate=0.0`, `timeout_rate=0.0` are acceptable placeholders *only in that one script*, since Experiment 4 doesn't reuse `run_episode` and never claims to report those fields in its own CSV columns -- Task 34's report must not cite Experiment 4's `invalid_rate`/`timeout_rate` for this reason).
+Update `run_experiment4.py`'s `_run_one` (Task 25) return statement to supply the four new fields (`stability_cost_mean=sum(...)/... `, `runtime_p95_sec=0.0`, `invalid_rate=0.0`, `timeout_rate=0.0` are acceptable placeholders *only in that one script*, since Experiment 4 doesn't reuse `run_episode` and never claims to report those fields in its own CSV columns -- Task 35's report must not cite Experiment 4's `invalid_rate`/`timeout_rate` for this reason).
 
 - [ ] **Step 10: Commit**
 
@@ -2010,7 +2030,7 @@ Expected: PASS (1 test)
 - [ ] **Step 6: Run the real comparison**
 
 Run: `python experiments/run_ground_truth_comparison.py`
-Expected: prints 3 lines. Record the actual gap percentage for Task 34's report -- if the greedy heuristic turns out to already be optimal on this tiny instance (gap=0%), that is a valid (if less dramatic) finding, not a reason to construct a harder instance until a nonzero gap appears.
+Expected: prints 3 lines. Record the actual gap percentage for Task 35's report -- if the greedy heuristic turns out to already be optimal on this tiny instance (gap=0%), that is a valid (if less dramatic) finding, not a reason to construct a harder instance until a nonzero gap appears.
 
 - [ ] **Step 7: Commit**
 
@@ -2129,7 +2149,7 @@ if __name__ == "__main__":
 - [ ] **Step 6: Run the real proxy comparison**
 
 Run: `python experiments/run_extended_timeout_proxy.py`
-Expected: prints one line per layout (B, C). Record the actual gap for Task 34's report, worded as "vs. an offline high-quality proxy," never "vs. the optimum."
+Expected: prints one line per layout (B, C). Record the actual gap for Task 35's report, worded as "vs. an offline high-quality proxy," never "vs. the optimum."
 
 - [ ] **Step 7: Commit**
 
@@ -2311,7 +2331,7 @@ for method in ('full_reopt', 'full_reopt_crp_rl'):
     print(method, costs)
 "
 ```
-Expected: two lines of 5 numbers each. Record both lists and their means for Task 34's report -- this is the evidence for whether the MVP's greedy-surrogate-based conclusions (all of Tasks 1-28) still hold with the real trained solver, or whether they need to be revisited before submission.
+Expected: two lines of 5 numbers each. Record both lists and their means for Task 35's report -- this is the evidence for whether the MVP's greedy-surrogate-based conclusions (all of Tasks 1-28) still hold with the real trained solver, or whether they need to be revisited before submission.
 
 - [ ] **Step 12: Commit**
 
@@ -2322,14 +2342,492 @@ git commit -m "feat(paper1): make the CRP solver backend pluggable, cache CRP_RL
 
 ---
 
-### Task 34: Runtime reporting + final Q1 experiment report (LaTeX, compiled to PDF)
+### Task 34: Rigor and logging — seed policy, Wilcoxon zero-handling, CRP_RL-scale fairness, structured run logs, Slurm submission
+
+**Why this task exists:** a post-plan review (prompted by "this costs real time and money, do not let bias or leakage make the research unfair") found five issues that would have made Tasks 20-33's results misleading or unauditable if run as originally written: (1) Task 33's greedy-vs-real-model comparison runs the model far outside its trained size range (10-24 containers vs. the model's trained 35-70), which is not a fair test of the model at all; (2) seeds 0-9 were already inspected by a human while debugging the Task 30 mutation bug, so using them as "the" reported evidence risks (the appearance of) cherry-picking even though no parameter was tuned based on what was seen; (3) `stats.wilcoxon_signed_rank` silently drops zero-difference pairs (scipy's default `zero_method="wilcox"`), which matters a lot here since many SAR-CRP-vs-Static pairs come back exactly equal (the MVP report's own finding) — the effective sample size was never disclosed; (4) every experiment ran on the shared login node with no persistent record of exactly what ran, when, on which code, with which parameters; (5) the costly runs (Experiment 1's 3,240 episodes) were never sized against the shared server's actual load before committing to them.
+
+**Files:**
+- Create: `paper1_sarcrp/src/sarcrp/seed_policy.py`
+- Create: `paper1_sarcrp/src/sarcrp/run_logging.py`
+- Create: `paper1_sarcrp/experiments/instances/generate_crp_rl_scale_instance.py`
+- Modify: `paper1_sarcrp/src/sarcrp/stats.py`
+- Modify: `paper1_sarcrp/experiments/run_experiment1.py`, `run_cross_layout.py`, `run_experiment4.py`, `run_mvp.py`, `run_sanity_report.py`, `run_ground_truth_comparison.py`, `run_extended_timeout_proxy.py`
+- Test: `paper1_sarcrp/tests/test_stats.py`, `paper1_sarcrp/tests/test_run_logging.py`
+
+**Interfaces:**
+- Produces: `seed_policy.DEV_SEEDS`, `seed_policy.REPORT_SEEDS`; `run_logging.log_run(script_name, params, duration_sec, output_paths, log_dir=None) -> Path`; `stats.WilcoxonResult` (dataclass: `p_value, n_pairs, n_nonzero_pairs`); `stats.wilcoxon_signed_rank(a, b, zero_method="pratt") -> WilcoxonResult` (return type changed from `float`)
+
+---
+
+#### Part A — Seed policy (dev vs. report)
+
+- [ ] **Step 1: Create the seed policy module**
+
+Create `paper1_sarcrp/src/sarcrp/seed_policy.py`:
+```python
+"""Seed policy (Task 34): seeds 0-9 were read by hand while diagnosing the
+Task 30 mutation bug (e.g. seed 7's per-event trace, medium uncertainty) and
+must never be the sole evidence behind a reported claim -- not because any
+parameter was tuned to them (none was), but because a reviewer cannot
+verify that after the fact, and "we looked at these seeds during
+development" is a real (if mild) form of selection even when unintentional.
+
+DEV_SEEDS remains available for smoke tests and reproducing a known
+bug/behavior. REPORT_SEEDS is the fresh, never-inspected set every
+"record this for the report" step in this plan must use instead."""
+
+DEV_SEEDS = tuple(range(10))
+REPORT_SEEDS = tuple(range(20, 40))  # 20 seeds (spec 23.6's stated minimum), none inspected during development
+```
+
+- [ ] **Step 2: Switch every reporting runner to `REPORT_SEEDS`**
+
+In `paper1_sarcrp/experiments/run_experiment1.py`, `run_cross_layout.py`, and `run_experiment4.py`, replace each file's own `SEEDS = tuple(range(20))` line with:
+```python
+from sarcrp.seed_policy import REPORT_SEEDS as SEEDS
+```
+(add this import alongside each file's existing `from sarcrp.simulator import run_episode` line; remove the old `SEEDS = tuple(range(20))` constant it replaces). `run_mvp.py` keeps its own `SEEDS = tuple(range(10))` unchanged — the MVP decision-gate check is explicitly a smoke test, not a reported statistical claim, so `DEV_SEEDS`-equivalent behavior is correct there and does not need to change.
+
+- [ ] **Step 3: Commit**
+
+```bash
+git add paper1_sarcrp/src/sarcrp/seed_policy.py paper1_sarcrp/experiments/run_experiment1.py paper1_sarcrp/experiments/run_cross_layout.py paper1_sarcrp/experiments/run_experiment4.py
+git commit -m "fix(paper1): separate dev seeds (already inspected) from report seeds (fresh) per spec 23.6"
+```
+
+---
+
+#### Part B — Wilcoxon zero-handling and effective-N disclosure
+
+- [ ] **Step 4: Update the failing tests in `test_stats.py`**
+
+Replace the two existing Wilcoxon tests:
+```python
+def test_wilcoxon_signed_rank_identical_samples_gives_high_p_value():
+    a = [1.0, 2.0, 3.0, 4.0, 5.0]
+    result = wilcoxon_signed_rank(a, list(a))
+    assert result.p_value == 1.0
+    assert result.n_pairs == 5
+    assert result.n_nonzero_pairs == 0
+
+
+def test_wilcoxon_signed_rank_detects_a_consistent_shift():
+    a = [1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0]
+    b = [2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0]  # every pair b > a by exactly 1
+    result = wilcoxon_signed_rank(a, b)
+    assert result.p_value < 0.05
+    assert result.n_nonzero_pairs == 8
+
+
+def test_wilcoxon_signed_rank_reports_effective_n_with_some_ties():
+    a = [1.0, 1.0, 1.0, 5.0, 6.0, 7.0, 8.0, 9.0]
+    b = [1.0, 1.0, 1.0, 4.0, 5.0, 6.0, 7.0, 8.0]  # first 3 pairs tied, last 5 differ by exactly 1
+    result = wilcoxon_signed_rank(a, b)
+    assert result.n_pairs == 8
+    assert result.n_nonzero_pairs == 5
+```
+(the third test is new; the first two replace the originals from Task 22 -- same scenarios, updated for the new return type)
+
+- [ ] **Step 5: Run to verify it fails**
+
+Run: `pytest tests/test_stats.py -v`
+Expected: FAIL — `result.p_value` raises `AttributeError` since `wilcoxon_signed_rank` still returns a bare `float`.
+
+- [ ] **Step 6: Implement**
+
+In `paper1_sarcrp/src/sarcrp/stats.py`, add the import and replace the function:
+```python
+from dataclasses import dataclass
+
+
+@dataclass
+class WilcoxonResult:
+    p_value: float
+    n_pairs: int
+    n_nonzero_pairs: int
+
+
+def wilcoxon_signed_rank(a: list[float], b: list[float], zero_method: str = "pratt") -> WilcoxonResult:
+    """Paired Wilcoxon signed-rank test (spec 23.6). Uses zero_method="pratt"
+    instead of scipy's default "wilcox": "wilcox" silently drops
+    zero-difference pairs from the ranking, which would quietly shrink the
+    effective sample size below the reported N with no record of it -- with
+    many SAR-CRP-vs-Static pairs coming back exactly equal (the MVP report's
+    finding), that matters here. n_nonzero_pairs is always returned so the
+    report can disclose it next to the p-value instead of citing N=20 when
+    the test effectively saw fewer distinct pairs."""
+    n_pairs = len(a)
+    n_nonzero_pairs = sum(1 for x, y in zip(a, b) if x != y)
+    if n_nonzero_pairs == 0:
+        return WilcoxonResult(p_value=1.0, n_pairs=n_pairs, n_nonzero_pairs=0)
+    _, p_value = scipy_stats.wilcoxon(a, b, zero_method=zero_method)
+    return WilcoxonResult(p_value=float(p_value), n_pairs=n_pairs, n_nonzero_pairs=n_nonzero_pairs)
+```
+
+- [ ] **Step 7: Run to verify it passes**
+
+Run: `pytest tests/test_stats.py -v`
+Expected: PASS (9 tests: 6 unaffected + 3 from Step 4)
+
+- [ ] **Step 8: Fix the one caller, `run_experiment1.py`'s `run_significance_tests`**
+
+In `paper1_sarcrp/experiments/run_experiment1.py`, change:
+```python
+        p_value = wilcoxon_signed_rank(matched_sarcrp, baseline_values)
+        delta = cliffs_delta(matched_sarcrp, baseline_values)
+        raw_p_values.append(p_value)
+        per_baseline[baseline] = {"p_value": p_value, "cliffs_delta": delta}
+```
+to:
+```python
+        wilcoxon_result = wilcoxon_signed_rank(matched_sarcrp, baseline_values)
+        delta = cliffs_delta(matched_sarcrp, baseline_values)
+        raw_p_values.append(wilcoxon_result.p_value)
+        per_baseline[baseline] = {
+            "p_value": wilcoxon_result.p_value,
+            "n_pairs": wilcoxon_result.n_pairs,
+            "n_nonzero_pairs": wilcoxon_result.n_nonzero_pairs,
+            "cliffs_delta": delta,
+        }
+```
+and update the two `print(...)`/CSV-writing spots that reference `stats_row['p_value']` to also print `n_nonzero_pairs` (`f"... (n_nonzero_pairs={stats_row['n_nonzero_pairs']}/{stats_row['n_pairs']})"`) and add an `n_nonzero_pairs` column to the `experiment1_significance.csv` header/rows written in `main()`.
+
+Also update Task 28's own test, `test_run_significance_tests_reports_holm_bonferroni_corrected_flags`, to assert on `result["static"]["n_nonzero_pairs"]` being present (it constructs synthetic rows where every seed differs by `0.01 * s`, so `n_nonzero_pairs` should equal the full seed count there).
+
+- [ ] **Step 9: Run to verify it passes**
+
+Run: `pytest tests/test_run_experiment1.py -v`
+Expected: PASS (4 tests)
+
+- [ ] **Step 10: Commit**
+
+```bash
+git add paper1_sarcrp/src/sarcrp/stats.py paper1_sarcrp/experiments/run_experiment1.py paper1_sarcrp/tests/test_stats.py paper1_sarcrp/tests/test_run_experiment1.py
+git commit -m "fix(paper1): stop silently dropping zero-difference pairs in Wilcoxon test, disclose effective N"
+```
+
+---
+
+#### Part C — A properly-scaled instance for the CRP_RL fairness comparison
+
+- [ ] **Step 11: Write the generator**
+
+Create `paper1_sarcrp/experiments/instances/generate_crp_rl_scale_instance.py`:
+```python
+"""Generates a yard instance sized within CRP_RL's actual training
+distribution (min_n_containers=35, max_n_containers=70, per
+external/CRP_RL/baselines/test.py's `args`) so Task 33's greedy-vs-real-model
+comparison is not testing the model outside its validated range -- every
+other instance in this suite (10-24 containers) is too small for that
+comparison to mean anything about the model's true quality. Deterministic,
+no RNG: mirrors small_layout_mvp.json's fix (spec 20 SC1) by requesting
+each stack's bottom container first, so every relocation is genuinely
+necessary rather than the "already sorted" degenerate case."""
+import json
+from pathlib import Path
+
+NUM_STACKS = 10
+CONTAINERS_PER_STACK = 5  # 10 * 5 = 50 containers, inside [35, 70]
+MAX_TIER = 6  # headroom above 5 for relocations
+
+
+def build_instance() -> dict:
+    stacks = []
+    per_stack_containers = []
+    container_id = 1
+    for s in range(NUM_STACKS):
+        containers = [f"C{c:03d}" for c in range(container_id, container_id + CONTAINERS_PER_STACK)]
+        container_id += CONTAINERS_PER_STACK
+        per_stack_containers.append(containers)
+        stacks.append({"id": f"S{s + 1}", "containers": containers, "max_tier": MAX_TIER})
+
+    # containers[0] = bottom (this schema's convention). Requesting tier 0
+    # (bottom) across every stack first, round-robin, guarantees the
+    # retrieval order never matches any stack's existing bottom-to-top order.
+    retrieval_order = []
+    for tier in range(CONTAINERS_PER_STACK):
+        for containers in per_stack_containers:
+            retrieval_order.append(containers[tier])
+
+    return {
+        "instance_id": "crp_rl_scale_fairness_50",
+        "layout": {"num_stacks": NUM_STACKS, "max_tier": MAX_TIER},
+        "stacks": stacks,
+        "initial_retrieval_order": retrieval_order,
+        "t_steps": 60,
+        "uncertainty_level": "medium",
+    }
+
+
+if __name__ == "__main__":
+    instance = build_instance()
+    out_path = Path(__file__).parent / "crp_rl_scale_instance.json"
+    out_path.write_text(json.dumps(instance, indent=2))
+    total = sum(len(s["containers"]) for s in instance["stacks"])
+    print(f"Wrote {out_path} with {total} containers (target range: 35-70)")
+```
+
+- [ ] **Step 12: Run it once to produce the instance file**
+
+Run: `python experiments/instances/generate_crp_rl_scale_instance.py`
+Expected: prints `Wrote .../crp_rl_scale_instance.json with 50 containers (target range: 35-70)`. The resulting `crp_rl_scale_instance.json` is committed as a static file (like every other instance in this suite) — the generator is not re-run at test/experiment time.
+
+- [ ] **Step 13: Redo Task 33's real-model comparison on this instance instead**
+
+Re-run Task 33 Step 11's comparison script, but point it at `crp_rl_scale_instance.json` instead of `small_layout_mvp.json`:
+```bash
+python -c "
+import random, json, sys
+sys.path.insert(0, 'src')
+from sarcrp.simulator import run_episode
+instance = json.load(open('experiments/instances/crp_rl_scale_instance.json'))
+for method in ('full_reopt', 'full_reopt_crp_rl'):
+    costs = [run_episode(instance, method_name=method, rng=random.Random(s)).total_cost_mean for s in range(5)]
+    print(method, costs)
+"
+```
+This is now a within-training-distribution comparison. The original Task 33 Step 11 run (on the 10-container `small_layout_mvp.json`) should still be reported too, but explicitly labeled "out-of-distribution sanity check only" in Task 35's report, not used as evidence about the model's true relative quality.
+
+- [ ] **Step 14: Commit**
+
+```bash
+git add paper1_sarcrp/experiments/instances/generate_crp_rl_scale_instance.py paper1_sarcrp/experiments/instances/crp_rl_scale_instance.json
+git commit -m "feat(paper1): add a 50-container instance inside CRP_RL's trained size range for a fair model comparison"
+```
+
+---
+
+#### Part D — Structured run logs
+
+- [ ] **Step 15: Write the failing test**
+
+Create `paper1_sarcrp/tests/test_run_logging.py`:
+```python
+import json
+from sarcrp.run_logging import log_run
+
+
+def test_log_run_writes_the_required_fields(tmp_path):
+    log_path = log_run("test_script.py", {"seeds": [1, 2, 3]}, duration_sec=1.234, output_paths=["out.csv"], log_dir=tmp_path)
+    assert log_path.exists()
+    entry = json.loads(log_path.read_text().strip().split("\n")[-1])
+    assert entry["script"] == "test_script.py"
+    assert entry["params"] == {"seeds": [1, 2, 3]}
+    assert entry["duration_sec"] == 1.234
+    assert entry["output_paths"] == ["out.csv"]
+    assert "git_commit" in entry
+    assert "hostname" in entry
+    assert "timestamp" in entry
+
+
+def test_log_run_appends_without_overwriting(tmp_path):
+    log_run("a.py", {}, 1.0, [], log_dir=tmp_path)
+    log_run("b.py", {}, 2.0, [], log_dir=tmp_path)
+    lines = (tmp_path / "run_log.jsonl").read_text().strip().split("\n")
+    assert len(lines) == 2
+```
+
+- [ ] **Step 16: Run to verify it fails**
+
+Run: `pytest tests/test_run_logging.py -v`
+Expected: FAIL with `ModuleNotFoundError: No module named 'sarcrp.run_logging'`
+
+- [ ] **Step 17: Implement**
+
+Create `paper1_sarcrp/src/sarcrp/run_logging.py`:
+```python
+import json
+import socket
+import subprocess
+import time
+from pathlib import Path
+
+_PACKAGE_ROOT = Path(__file__).resolve().parents[2]  # .../paper1_sarcrp
+
+
+def get_git_commit() -> str:
+    try:
+        return subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=_PACKAGE_ROOT, text=True).strip()
+    except Exception:
+        return "unknown"
+
+
+def log_run(script_name: str, params: dict, duration_sec: float, output_paths: list[str], log_dir: Path | None = None) -> Path:
+    """Appends one JSON line per run to experiments/logs/run_log.jsonl:
+    timestamp, the git commit the code was at, hostname, the exact params
+    used, wall-clock duration, and where the output landed. A costly run's
+    provenance is always on record this way, not just whatever happened to
+    be printed to stdout at the time."""
+    log_dir = log_dir or (_PACKAGE_ROOT / "experiments" / "logs")
+    log_dir.mkdir(parents=True, exist_ok=True)
+    entry = {
+        "timestamp": time.strftime("%Y-%m-%dT%H:%M:%S"),
+        "script": script_name,
+        "git_commit": get_git_commit(),
+        "hostname": socket.gethostname(),
+        "params": params,
+        "duration_sec": round(duration_sec, 3),
+        "output_paths": output_paths,
+    }
+    log_path = log_dir / "run_log.jsonl"
+    with log_path.open("a") as f:
+        f.write(json.dumps(entry) + "\n")
+    return log_path
+```
+
+- [ ] **Step 18: Run to verify it passes**
+
+Run: `pytest tests/test_run_logging.py -v`
+Expected: PASS (2 tests)
+
+- [ ] **Step 19: Retrofit every runner to call `log_run`**
+
+Each of the 7 runner scripts gets the same three-line pattern around its existing `main()` body: import `time` and `log_run` if not already imported, capture `_start = time.monotonic()` as the first line inside `main()`, and call `log_run(...)` as the last line before `main()` returns. Exact diffs:
+
+`paper1_sarcrp/experiments/run_experiment1.py` -- add `from sarcrp.run_logging import log_run` to the imports; in `main()`:
+```python
+def main():
+    _start = time.monotonic()
+    instance = json.loads((Path(__file__).parent / "instances" / "small_layout_mvp.json").read_text())
+    rows = run_factorial(instance)
+    # ...(unchanged CSV-writing and printing code)...
+    log_run("run_experiment1.py", {"seeds": list(SEEDS), "factor_grid": FACTOR_GRID, "methods": list(METHODS)},
+            time.monotonic() - _start, [str(out_path), str(sig_path)])
+```
+(add `import time` at the top if not already present via another import)
+
+`paper1_sarcrp/experiments/run_cross_layout.py` -- same pattern:
+```python
+def main():
+    _start = time.monotonic()
+    rows = run_all_layouts()
+    # ...(unchanged)...
+    log_run("run_cross_layout.py", {"seeds": list(SEEDS), "methods": list(METHODS), "timeout_by_layout": TIMEOUT_BY_LAYOUT},
+            time.monotonic() - _start, [str(out_path)])
+```
+
+`paper1_sarcrp/experiments/run_experiment4.py`:
+```python
+def main():
+    _start = time.monotonic()
+    instance = json.loads(...)
+    rows = run_confidence_sweep(instance)
+    # ...(unchanged)...
+    log_run("run_experiment4.py", {"seeds": list(SEEDS), "confidence_levels": list(CONFIDENCE_LEVELS)},
+            time.monotonic() - _start, [str(out_path)])
+```
+
+`paper1_sarcrp/experiments/run_mvp.py`:
+```python
+def main():
+    _start = time.monotonic()
+    instance = json.loads(...)
+    rows = run_all_methods(instance)
+    # ...(unchanged)...
+    log_run("run_mvp.py", {"seeds": list(SEEDS), "methods": list(METHODS)}, time.monotonic() - _start, [str(out_path)])
+```
+
+`paper1_sarcrp/experiments/run_sanity_report.py`:
+```python
+def main():
+    _start = time.monotonic()
+    instance = json.loads(...)
+    report = run_sanity_checks(instance)
+    # ...(unchanged print statements)...
+    from sarcrp.run_logging import log_run
+    log_run("run_sanity_report.py", {"seeds": list(range(10))}, time.monotonic() - _start, [])
+```
+
+`paper1_sarcrp/experiments/run_ground_truth_comparison.py`:
+```python
+def main():
+    _start = time.monotonic()
+    instance = json.loads(...)
+    result = run_comparison(instance)
+    # ...(unchanged print statements)...
+    from sarcrp.run_logging import log_run
+    log_run("run_ground_truth_comparison.py", {"instance": "tiny_ground_truth.json"}, time.monotonic() - _start, [])
+```
+
+`paper1_sarcrp/experiments/run_extended_timeout_proxy.py`:
+```python
+def main():
+    _start = time.monotonic()
+    instances_dir = Path(__file__).parent / "instances"
+    for layout_name, filename, normal_timeout in (...):
+        ...
+    from sarcrp.run_logging import log_run
+    log_run("run_extended_timeout_proxy.py", {"extended_timeout": 300.0}, time.monotonic() - _start, [])
+```
+
+Add `paper1_sarcrp/experiments/logs/` to `paper1_sarcrp/.gitignore` -- the log file is a local audit trail, regenerated on every run, not something to commit (it would also record this machine's hostname on every run, which has no reason to be public).
+
+- [ ] **Step 20: Run the full suite**
+
+Run: `pytest -v`
+Expected: PASS, no regressions from adding `log_run` calls (they only append to a local file, nothing else changes).
+
+- [ ] **Step 21: Commit**
+
+```bash
+git add paper1_sarcrp/src/sarcrp/run_logging.py paper1_sarcrp/tests/test_run_logging.py paper1_sarcrp/experiments/run_experiment1.py paper1_sarcrp/experiments/run_cross_layout.py paper1_sarcrp/experiments/run_experiment4.py paper1_sarcrp/experiments/run_mvp.py paper1_sarcrp/experiments/run_sanity_report.py paper1_sarcrp/experiments/run_ground_truth_comparison.py paper1_sarcrp/experiments/run_extended_timeout_proxy.py paper1_sarcrp/.gitignore
+git commit -m "feat(paper1): add structured JSONL run logs (git commit, host, params, duration) to every experiment runner"
+```
+
+---
+
+#### Part E — Cost estimate + Slurm submission for the expensive runs
+
+- [ ] **Step 22: Time a small sample before committing to the full Experiment 1 run**
+
+Run on the server (quick mode, not Slurm — this is a cheap probe):
+```bash
+python -c "
+import time, random, json, sys
+sys.path.insert(0, 'src')
+from sarcrp.simulator import run_episode
+instance = json.load(open('experiments/instances/small_layout_mvp.json'))
+start = time.monotonic()
+for method in ('static', 'full_reopt', 'periodic', 'event_triggered_no_stability', 'mpc', 'sarcrp'):
+    for seed in range(3):
+        run_episode(instance, method_name=method, rng=random.Random(seed))
+elapsed = time.monotonic() - start
+n_sample = 6 * 3
+n_full = 3 * 3 * 3 * 6 * len(__import__('sarcrp.seed_policy', fromlist=['REPORT_SEEDS']).REPORT_SEEDS)
+print(f'{n_sample} episodes took {elapsed:.2f}s -> {elapsed / n_sample:.4f}s/episode -> full run ({n_full} episodes) estimated at {elapsed / n_sample * n_full / 60:.1f} minutes')
+"
+```
+Expected: an estimated total runtime. **Report this number back before running the full job** -- if it's more than ~20 minutes, use Slurm (Step 23) rather than an interactive `ssh` command, both because the login node is shared with other users' jobs (noisy, and this plan's own report should not present runtime numbers gathered while competing for CPU with someone else's job) and because a multi-hour interactive SSH command risks being killed by a dropped connection (already observed once this session, during the `torch` install).
+
+- [ ] **Step 23: Submit the full Experiment 1 run via Slurm**
+
+From the laptop: `mutagen.exe sync flush story-research`, then on the server:
+```bash
+cd ~/thuongnm_hust/Story_Research
+sed -i '12s#.*#python paper1_sarcrp/experiments/run_experiment1.py#' script
+conda activate story_research
+. run_via_slurm
+squeue -u $USER
+```
+(this is exactly `run_on_gpu.sh --train experiments/run_experiment1.py`'s own internal sequence, per `SSH_A100_Setup_Runbook.md` §5 -- run it manually here since `run_on_gpu.sh` assumes the caller is on the laptop with an interactive terminal, not mid-plan-execution). Monitor with `squeue -u $USER` and `cat slurm-<jobid>.out` (or `./run_on_gpu.sh --status` / `--log` from the laptop) rather than blocking on the SSH session.
+
+- [ ] **Step 24: Once the job completes, verify and commit the results**
+
+```bash
+ssh a100-B "cat ~/thuongnm_hust/Story_Research/paper1_sarcrp/experiments/results/experiment1_significance.csv"
+```
+Then from the laptop: `mutagen.exe sync flush story-research`, `git add paper1_sarcrp/experiments/results/experiment1_results.csv paper1_sarcrp/experiments/results/experiment1_significance.csv`, commit. (`experiments/results/` is gitignored per Task 1's `.gitignore` -- override with `git add -f` only for these two final CSVs if they should be reviewable on GitHub without re-running; otherwise leave them local and cite the numbers directly in Task 35's report.)
+
+---
+
+### Task 35: Runtime reporting + final Q1 experiment report (LaTeX, compiled to PDF)
 
 **Files:**
 - Create: `writeups/paper1_q1_report/main.tex`
 - Create: `writeups/paper1_q1_report/Makefile`
 
 **Interfaces:**
-- Consumes: every CSV/printed result produced by Tasks 20-33 — this is deliberately the last task in the plan so every number it cites already exists on disk before writing a single sentence about it.
+- Consumes: every CSV/printed result produced by Tasks 20-34 — this is deliberately the last task in the plan so every number it cites already exists on disk before writing a single sentence about it.
 
 - [ ] **Step 1: Capture the hardware disclosure (spec 51)**
 
@@ -2338,15 +2836,16 @@ Run on the server: `ssh a100-B "lscpu | head -15 && python -c 'import platform; 
 - [ ] **Step 2: Write the report skeleton**
 
 Create `writeups/paper1_q1_report/main.tex` with sections:
-- `Setup` (hardware from Step 1)
+- `Setup` (hardware from Step 1; note the seed policy from Task 34 Part A -- report-grade numbers use `REPORT_SEEDS` (20-39), never the `DEV_SEEDS` (0-9) inspected during debugging)
 - `Baselines and Ablations Implemented` (table of B1-B6, A1-A6 with one-line descriptions, referencing spec 22/25 — Task 20/21)
-- `Experiment 1 Results` (factorial table + significance table from Task 28's two CSVs, now with freeze_size/lambda actually varying per the Task 28 fix)
+- `Experiment 1 Results` (factorial table + significance table from Task 28's two CSVs, now with freeze_size/lambda actually varying per the Task 28 fix, run via Slurm per Task 34 Part E, and citing `n_nonzero_pairs` next to every p-value per Task 34 Part B)
 - `Experiment 3: Cross-Layout` (performance-drop numbers from Task 24, run with the spec-17 timeout tiers from Task 32)
 - `Experiment 4: Data Confidence Sensitivity` (changed-actions-vs-confidence trend from Task 25)
 - `Sanity Checks` (SC1-SC4 verdicts from Task 26)
 - `Ground Truth` (optimality gap from Task 31's tractable 6-container instance, plus the offline-proxy gap for Layouts B/C from Task 32 -- worded as "vs. an offline proxy," never "vs. the optimum," for the B/C numbers)
 - `Metrics Completeness` (invalid rate, timeout rate, P95 runtime, stability cost from Task 30 -- report whether `invalid_rate` was ever nonzero now that `is_plan_valid` is actually wired in)
-- `Real Solver Comparison` (Task 33's greedy-vs-`full_reopt_crp_rl` 5-seed comparison; state plainly whether it changes any conclusion from Tasks 1-28's greedy-surrogate-based numbers)
+- `Real Solver Comparison` (both of Task 33/34's greedy-vs-`full_reopt_crp_rl` comparisons -- the original 10-container run labeled explicitly "out-of-distribution sanity check, not evidence of relative quality," and the Task 34 Part C 50-container run, inside CRP_RL's trained size range, as the one comparison actually usable as evidence)
+- `Reproducibility` (cite `experiments/logs/run_log.jsonl`'s git-commit/params/duration entries for every number in this report, per Task 34 Part D)
 - `Limitations` (Experiment 5 operator-acceptance study intentionally omitted per spec 23's own "optional" framing; note it here rather than silently dropping it)
 - `Conclusion`
 
@@ -2387,7 +2886,7 @@ git push
 
 ## Self-Review Notes
 
-- **Spec coverage:** Task 20 covers §22 B3-B5; Task 21 covers §25 A1-A6; Task 22 covers §23.6 in full; Task 23 builds the §21.1 exhaustive solver (Task 31 is what actually *runs* it for a reported optimality gap — building the tool and producing the evidence are different deliverables, kept as separate tasks on purpose); Task 24 covers §23 Experiment 3 + §50; Task 25 covers §23 Experiment 4; Task 26 covers §20/§49 SC1-SC4; Task 27 wires everything into the one execution path the suite depends on, and is also where the freeze_size/lambda threading bug caught during this plan's own review gets fixed; Task 28 covers §23 Experiment 1's factorial + §23.6; Task 30 covers the §24 metrics this plan's first draft had missed entirely (invalid rate — and makes `is_plan_valid` the first thing in this codebase that ever actually exercises spec §11.3's `M_inf` penalty branch, since every prior task hardcoded `is_valid=True` — timeout rate, P95 runtime, stability cost); Task 31 produces the actual §21.1 optimality-gap number; Task 32 covers §17 timeout tiering and §21.2's extended-timeout proxy; Task 33 resolves whether Task 19's real CRP_RL model is used anywhere (it wasn't, in this plan's first draft) by making the solver backend pluggable and comparing greedy vs. real-model results directly; Task 34 covers §51 runtime reporting and is the final deliverable, ordered last on purpose so it only ever cites numbers that already exist on disk. Experiment 5 (operator acceptance) is explicitly optional per §23 and is not included — flagged in Task 34's Limitations section rather than silently dropped. Experiment 2 (benchmark sanity + small-instance ground truth) is split across Tasks 23/31 (ground truth) and 26 (sanity), since §21 and §20/§49 are independent deliverables that happen to share one experiment number in the spec.
+- **Spec coverage:** Task 20 covers §22 B3-B5; Task 21 covers §25 A1-A6; Task 22 covers §23.6 in full; Task 23 builds the §21.1 exhaustive solver (Task 31 is what actually *runs* it for a reported optimality gap — building the tool and producing the evidence are different deliverables, kept as separate tasks on purpose); Task 24 covers §23 Experiment 3 + §50; Task 25 covers §23 Experiment 4; Task 26 covers §20/§49 SC1-SC4; Task 27 wires everything into the one execution path the suite depends on, and is also where the freeze_size/lambda threading bug caught during this plan's own review gets fixed; Task 28 covers §23 Experiment 1's factorial + §23.6; Task 30 covers the §24 metrics this plan's first draft had missed entirely (invalid rate — and makes `is_plan_valid` the first thing in this codebase that ever actually exercises spec §11.3's `M_inf` penalty branch, since every prior task hardcoded `is_valid=True` — timeout rate, P95 runtime, stability cost); Task 31 produces the actual §21.1 optimality-gap number; Task 32 covers §17 timeout tiering and §21.2's extended-timeout proxy; Task 33 resolves whether Task 19's real CRP_RL model is used anywhere (it wasn't, in this plan's first draft) by making the solver backend pluggable and comparing greedy vs. real-model results directly; Task 34 covers the fairness/rigor gaps a "this costs real money, do not let it be biased or unfair" review surfaced (out-of-distribution model comparison, dev-vs-report seed separation, silently-dropped Wilcoxon ties, no run provenance, no cost estimate before an expensive job) that none of Tasks 20-33 addressed on their own; Task 35 covers §51 runtime reporting and is the final deliverable, ordered last on purpose so it only ever cites numbers that already exist on disk. Experiment 5 (operator acceptance) is explicitly optional per §23 and is not included — flagged in Task 35's Limitations section rather than silently dropped. Experiment 2 (benchmark sanity + small-instance ground truth) is split across Tasks 23/31 (ground truth) and 26 (sanity), since §21 and §20/§49 are independent deliverables that happen to share one experiment number in the spec.
 - **Type consistency:** `ReplanDecision` (Task 11) keeps its original field names throughout — Tasks 20, 21, and 33 all consume it unchanged. `sarcrp_core.replan` picks up four new parameters across this plan (`use_local_search`, `impact_weights` in Task 21; `solver` in Task 33) plus the pre-existing `h_f`/`lam`/`mu`, all with defaults that preserve every earlier caller's behavior — Task 21 Step 4 and Task 33 Step 8 both keep the MVP's original `test_sarcrp_core.py` tests in the "must still pass" set to enforce this. `EpisodeMetrics` (Task 13) gains four fields in Task 30; every construction site (`simulator.py`'s own `return`, and `run_experiment4.py`'s hand-built one from Task 25) is updated in that same task, not left stale.
 - **Self-review catch, fixed inline:** the first draft of this plan defined Experiment 1's `freeze_size`/`lambda` factorial grid (Task 28) but never threaded either value through `run_episode` (Task 27) — every grid point would have silently produced identical results. Fixed by adding `h_f`/`lam` parameters to `run_episode` (Task 27) and an `h_f` parameter to `event_triggered_no_stability` (Task 20), with a regression test in both Task 27 and Task 28 asserting the override actually changes the output, not just that the grid is iterated over.
-- **Placeholder scan:** every task's code blocks are complete, runnable functions — no `TODO`/`pass  # implement`. The "record the actual numbers" steps (Tasks 24, 25, 26, 28, 31, 32, 33) are deliberately not pre-filled with invented numbers; Task 34 is the single place those real numbers get written into prose, exactly like the MVP report's precedent of filling in real CSV output rather than guessing ahead of the run.
+- **Placeholder scan:** every task's code blocks are complete, runnable functions — no `TODO`/`pass  # implement`. The "record the actual numbers" steps (Tasks 24, 25, 26, 28, 31, 32, 33) are deliberately not pre-filled with invented numbers; Task 35 is the single place those real numbers get written into prose, exactly like the MVP report's precedent of filling in real CSV output rather than guessing ahead of the run.
