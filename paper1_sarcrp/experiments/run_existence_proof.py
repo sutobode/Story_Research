@@ -222,6 +222,57 @@ def run_multistep_scenario(seed: int, extra_steps: int = 10) -> dict:
     }
 
 
+def run_lookahead_validation(seed: int, extra_steps: int = 10) -> dict:
+    """Validates sarcrp_core._apply_fallback_margin's carried_gain
+    mechanism for real, not just via Scenario C's manual tau_frac=0
+    override: runs the SAME forced-event-then-random-continuation episode
+    twice, once with plain SAR-CRP (carried_gain never threaded,
+    tau_frac=0.01 throughout, matching the "sarcrp" method) and once with
+    the lookahead margin (carried_gain threaded from the very first
+    decision onward, tau_frac=0.01 throughout -- no manual override
+    anywhere, matching the "sarcrp_lookahead" method). Both face the
+    identical subsequent event stream."""
+    state, old_queue, target = build_scale_scenario()
+    plan_initial = solve_crp(state, old_queue, time_limit_sec=5.0)
+    forced_new_queue = force_urgent_insertion(old_queue, target)
+    urgent = [target]
+
+    subsequent_events = generate_event_stream(
+        forced_new_queue, extra_steps, "medium", random.Random(seed), fixed_confidence=SCALE_EVENT_CONFIDENCE,
+    )
+
+    def run_path(use_lookahead: bool) -> float:
+        rng = random.Random(seed)
+        carried_gain = 0.0
+        decision = replan(
+            state, plan_initial, old_queue, forced_new_queue, urgent, rng=rng,
+            conf_new=SCALE_EVENT_CONFIDENCE, carried_gain=carried_gain, time_limit_sec=5.0,
+        )
+        plan, queue = decision.plan, forced_new_queue
+        total_cost = decision.j_new
+        carried_gain = decision.carried_gain_next if use_lookahead else 0.0
+        for event in subsequent_events:
+            ev_urgent = [event.affected_containers[0]] if event.type == "URGENT_INSERTION" and event.affected_containers else []
+            step_decision = replan(
+                state, plan, queue, event.new_queue, ev_urgent, rng=rng,
+                conf_new=event.confidence, time_limit_sec=5.0, carried_gain=carried_gain,
+            )
+            total_cost += step_decision.j_new
+            plan, queue = step_decision.plan, event.new_queue
+            carried_gain = step_decision.carried_gain_next if use_lookahead else 0.0
+        return total_cost
+
+    myopic_total = run_path(use_lookahead=False)
+    lookahead_total = run_path(use_lookahead=True)
+    return {
+        "seed": seed,
+        "myopic_total": myopic_total,
+        "lookahead_total": lookahead_total,
+        "lookahead_better": lookahead_total < myopic_total,
+        "diff": myopic_total - lookahead_total,
+    }
+
+
 def main():
     _start = time.monotonic()
 
@@ -255,6 +306,14 @@ def main():
     print(f"counterfactual (early-fix) better on {better_count}/{len(REPORT_SEEDS)} seeds")
     print(f"real_total - counterfactual_total: mean={sum(diffs) / len(diffs):.4f}, "
           f"min={min(diffs):.4f}, max={max(diffs):.4f}")
+
+    print("\n=== Scenario D: lookahead margin validation (sarcrp vs sarcrp_lookahead, real mechanism) ===")
+    results_d = [run_lookahead_validation(seed) for seed in REPORT_SEEDS]
+    better_count_d = sum(r["lookahead_better"] for r in results_d)
+    diffs_d = [r["diff"] for r in results_d]
+    print(f"lookahead better on {better_count_d}/{len(REPORT_SEEDS)} seeds")
+    print(f"myopic_total - lookahead_total: mean={sum(diffs_d) / len(diffs_d):.4f}, "
+          f"min={min(diffs_d):.4f}, max={max(diffs_d):.4f}")
 
     log_run(
         "run_existence_proof.py",
