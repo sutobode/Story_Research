@@ -1,0 +1,13 @@
+{
+  "instance_id": "mvp_small_01",
+  "layout": {"num_stacks": 4, "max_tier": 5},
+  "stacks": [
+    {"id": "S1", "containers": ["C10", "C09", "C08", "C07"], "max_tier": 5},
+    {"id": "S2", "containers": ["C06", "C05", "C04"], "max_tier": 5},
+    {"id": "S3", "containers": ["C03", "C02", "C01"], "max_tier": 5},
+    {"id": "S4", "containers": [], "max_tier": 5}
+  ],
+  "initial_retrieval_order": ["C10", "C06", "C03", "C09", "C05", "C02", "C08", "C04", "C01", "C07"],
+  "t_steps": 30,
+  "uncertainty_level": "medium"
+}
