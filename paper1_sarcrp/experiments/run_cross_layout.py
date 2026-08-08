@@ -7,9 +7,9 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 from sarcrp.simulator import run_episode  # noqa: E402
+from sarcrp.seed_policy import REPORT_SEEDS as SEEDS  # noqa: E402
 
 METHODS = ("static", "full_reopt", "sarcrp")
-SEEDS = tuple(range(20))  # spec 23.6: >=20 seeds for a reported experiment
 LAYOUT_FILES = {
     "layout_a": "small_layout_mvp.json",
     "layout_b": "layout_b.json",

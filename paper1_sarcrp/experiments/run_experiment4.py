@@ -11,9 +11,9 @@ from sarcrp.crp_solver import solve_crp  # noqa: E402
 from sarcrp.baselines import static_plan, full_reoptimization  # noqa: E402
 from sarcrp.sarcrp_core import replan  # noqa: E402
 from sarcrp.objective import compute_objective, data_confidence_cost, operational_cost, relocation_count, stability_cost  # noqa: E402
+from sarcrp.seed_policy import REPORT_SEEDS as SEEDS  # noqa: E402
 
 CONFIDENCE_LEVELS = (1.0, 0.7, 0.4, 0.2)  # spec 23 Experiment 4
-SEEDS = tuple(range(20))
 
 
 def _run_one(instance: dict, method_name: str, fixed_confidence: float, rng: random.Random) -> EpisodeMetrics:
