@@ -1,0 +1,211 @@
+"""Existence-proof experiment: Experiments 1/3/4 all show SAR-CRP tying
+Static exactly (0/20 nonzero seed pairs, every uncertainty level, every
+layout, every confidence level) because that suite's random event streams
+almost never cross theta_impact=0.30 (SC4: mean impact 0.090). That is a
+benchmark-calibration fact, not proof the trigger+repair mechanism itself
+never works -- this script settles that question directly with two
+deliberately engineered, deterministic events instead of a random stream.
+
+Building and debugging this scenario caught three real implementation bugs
+along the way (all fixed and committed separately, with their own tests):
+I_blocking deviated from spec's union(old,new) top-k formula;
+local_search_repair's epsilon-greedy walk could return a plan worse than
+its own starting candidate (no best-ever-seen tracking); and candidate C3
+(and N5, and baselines.mpc_receding_horizon) solved their "tail" against
+the ORIGINAL, untouched state/queue instead of the state that results
+after the frozen/kept prefix's own actions, wasting relocations on
+already-covered containers.
+
+Scenario A (small, 7 containers): TARGET sits buried at the bottom of a
+stack under 2 blockers and is placed LAST in the initial retrieval order.
+A forced URGENT_INSERTION promotes it to top priority. Impact crosses
+theta_impact, but the achievable operational gain (one urgent container's
+delay, on a 7-action plan) is smaller than the minimum stability +
+data-confidence cost of any repair that touches the plan's tail at all --
+SAR-CRP correctly (not buggily) still chooses KEEP.
+
+Scenario B (50 containers, crp_rl_scale_instance.json -- already built
+for the CRP_RL fairness comparison, reused here as-is, no new tuning):
+the same forced-promotion pattern, at industrially-relevant scale. Impact
+crosses threshold once the event's confidence drops to 0.5 (squarely
+inside event_generator's own high-uncertainty confidence range,
+0.20-0.80 -- not a cherry-picked value). A real improving candidate IS
+found (~0.51 gain, ~0.83% of J_old) -- but it falls just under spec's own
+1%-of-J_old fallback margin (tau = 0.01 * J(P_old)), confirmed across
+every one of the 20 REPORT_SEEDS. This is the precise, well-characterized
+boundary this suite's random benchmark never got close enough to see.
+"""
+import json
+import random
+import sys
+import time
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
+from sarcrp.baselines import full_reoptimization, static_plan  # noqa: E402
+from sarcrp.crp_solver import solve_crp  # noqa: E402
+from sarcrp.impact_estimator import compute_impact  # noqa: E402
+from sarcrp.objective import (  # noqa: E402
+    compute_objective, data_confidence_cost, operational_cost, relocation_count,
+    retrieval_delay_norm, stability_cost,
+)
+from sarcrp.run_logging import log_run  # noqa: E402
+from sarcrp.sarcrp_core import replan  # noqa: E402
+from sarcrp.schemas import Layout, Stack, YardState  # noqa: E402
+from sarcrp.seed_policy import REPORT_SEEDS  # noqa: E402
+
+TARGET = "C07"
+FORCED_EVENT_CONFIDENCE = 0.75  # plausible mid/high-uncertainty confidence for the forced event (not a flat 1.0)
+SCALE_EVENT_CONFIDENCE = 0.5  # inside event_generator.CONFIDENCE_RANGE_BY_UNCERTAINTY["high"] = (0.20, 0.80)
+
+
+def build_scenario() -> tuple[YardState, list[str]]:
+    """7 containers, not 10: is_action_affected's rank-shift rule (spec 8.5,
+    r_shift=5 default) only flags TARGET's own action when its shift is
+    STRICTLY > 5, which requires TARGET's original queue position to be
+    >= 6 (0-indexed) -- and both i_order's Kendall-tau ratio and i_plan's
+    affected-fraction ratio for a single-item move-to-front get WEAKER as
+    the queue grows longer (more unaffected pairs/actions dilute them). 7
+    is the smallest queue where the affected-action term can fire at all,
+    which keeps this scenario's Impact score away from the trigger
+    threshold by margin rather than by luck."""
+    stacks = [
+        Stack(id="S1", containers=["C01", "C02"], max_tier=5),
+        Stack(id="S2", containers=["C03", "C04"], max_tier=5),
+        Stack(id="S3", containers=["C07", "C08", "C09"], max_tier=5),  # TARGET buried under 2
+    ]
+    layout = Layout(num_stacks=3, max_tier=5)
+    initial_order = ["C02", "C01", "C04", "C03", "C09", "C08", "C07"]  # TARGET last (position 6)
+    state = YardState(
+        instance_id="existence_proof_urgent_unblock", time_step=0, layout=layout, stacks=stacks,
+        container_attributes={}, retrieval_queue=initial_order, pickup_prob={},
+        data_timestamp=0, state_confidence=1.0,
+    )
+    return state, initial_order
+
+
+def build_scale_scenario() -> tuple[YardState, list[str], str]:
+    """Reuses crp_rl_scale_instance.json (Task 34 Part C) as-is -- no new
+    instance tuning. TARGET is whatever container the generator already
+    placed last in the retrieval order (deterministic, not hand-picked)."""
+    instance = json.loads((Path(__file__).parent / "instances" / "crp_rl_scale_instance.json").read_text())
+    stacks = [Stack(id=s["id"], containers=list(s["containers"]), max_tier=s["max_tier"]) for s in instance["stacks"]]
+    old_queue = list(instance["initial_retrieval_order"])
+    state = YardState(
+        instance_id=instance["instance_id"], time_step=0, layout=Layout(**instance["layout"]), stacks=stacks,
+        container_attributes={}, retrieval_queue=old_queue, pickup_prob={}, data_timestamp=0, state_confidence=1.0,
+    )
+    return state, old_queue, old_queue[-1]
+
+
+def force_urgent_insertion(old_queue: list[str], target: str) -> list[str]:
+    """A deterministic, hand-constructed URGENT_INSERTION -- not sampled by
+    event_generator.apply_urgent_insertion -- so the scenario's magnitude
+    is a design choice, not a seed artifact."""
+    return [target] + [c for c in old_queue if c != target]
+
+
+def _summarize(plan, plan_old, urgent: list[str], conf_new: float, label: str) -> dict:
+    op = operational_cost(plan, urgent, is_valid=True)
+    stab, violated = stability_cost(plan, plan_old, frozen_count=0)
+    data = data_confidence_cost(plan, plan_old, conf_new=conf_new)
+    j = compute_objective(op, 0.0 if violated else stab, data)
+    return {
+        "method": label,
+        "relocation_count": relocation_count(plan),
+        "retrieval_delay_norm_target": retrieval_delay_norm(plan, urgent),
+        "operational_cost": op,
+        "stability_cost": 0.0 if violated else stab,
+        "total_cost_J": j,
+    }
+
+
+def run_once(seed: int) -> dict:
+    """Scenario A (small, 7 containers)."""
+    rng = random.Random(seed)
+    state, old_queue = build_scenario()
+    plan_old = solve_crp(state, old_queue, time_limit_sec=5.0)
+    new_queue = force_urgent_insertion(old_queue, TARGET)
+    urgent = [TARGET]
+
+    impact = compute_impact(old_queue, new_queue, state, state, plan_old, conf_new=FORCED_EVENT_CONFIDENCE)
+    decision = replan(state, plan_old, old_queue, new_queue, urgent, rng=rng, conf_new=FORCED_EVENT_CONFIDENCE, time_limit_sec=5.0)
+    full_reopt_plan = full_reoptimization(state, new_queue, time_limit_sec=5.0)
+    static_result = static_plan(plan_old)
+
+    rows = [
+        _summarize(static_result, plan_old, urgent, FORCED_EVENT_CONFIDENCE, "static"),
+        _summarize(decision.plan, plan_old, urgent, FORCED_EVENT_CONFIDENCE, "sarcrp"),
+        _summarize(full_reopt_plan, plan_old, urgent, FORCED_EVENT_CONFIDENCE, "full_reopt"),
+    ]
+    return {
+        "seed": seed,
+        "impact_total": impact.total,
+        "impact_breakdown": {
+            "i_order": impact.i_order, "i_target": impact.i_target,
+            "i_blocking": impact.i_blocking, "i_plan": impact.i_plan, "i_conf": impact.i_conf,
+        },
+        "sarcrp_decision": decision.decision,
+        "rows": rows,
+    }
+
+
+def run_once_scale(seed: int) -> dict:
+    """Scenario B (50 containers, crp_rl_scale_instance.json)."""
+    rng = random.Random(seed)
+    state, old_queue, target = build_scale_scenario()
+    plan_old = solve_crp(state, old_queue, time_limit_sec=5.0)
+    new_queue = force_urgent_insertion(old_queue, target)
+    urgent = [target]
+
+    impact = compute_impact(old_queue, new_queue, state, state, plan_old, conf_new=SCALE_EVENT_CONFIDENCE)
+    decision = replan(state, plan_old, old_queue, new_queue, urgent, rng=rng, conf_new=SCALE_EVENT_CONFIDENCE, time_limit_sec=5.0)
+    gain = decision.j_old - decision.j_new
+    tau = 0.01 * decision.j_old
+    return {
+        "seed": seed,
+        "target": target,
+        "impact_total": impact.total,
+        "sarcrp_decision": decision.decision,
+        "j_old": decision.j_old,
+        "j_new": decision.j_new,
+        "gain": gain,
+        "tau": tau,
+    }
+
+
+def main():
+    _start = time.monotonic()
+
+    print("=== Scenario A: small (7 containers) ===")
+    results_a = [run_once(seed) for seed in REPORT_SEEDS]
+    print(f"Impact.total (deterministic event -> identical across seeds): {results_a[0]['impact_total']:.4f}")
+    print(f"Impact breakdown: {results_a[0]['impact_breakdown']}")
+    decisions_a = sorted({r["sarcrp_decision"] for r in results_a})
+    print(f"SAR-CRP decisions across {len(REPORT_SEEDS)} seeds: {decisions_a}")
+    for method in ("static", "sarcrp", "full_reopt"):
+        js = [next(row["total_cost_J"] for row in r["rows"] if row["method"] == method) for r in results_a]
+        delays = [next(row["retrieval_delay_norm_target"] for row in r["rows"] if row["method"] == method) for r in results_a]
+        relocs = [next(row["relocation_count"] for row in r["rows"] if row["method"] == method) for r in results_a]
+        print(f"{method}: J mean={sum(js) / len(js):.4f}, "
+              f"retrieval_delay_norm(target) mean={sum(delays) / len(delays):.4f}, "
+              f"relocations mean={sum(relocs) / len(relocs):.2f}")
+
+    print("\n=== Scenario B: scale (50 containers, crp_rl_scale_instance.json) ===")
+    results_b = [run_once_scale(seed) for seed in REPORT_SEEDS]
+    print(f"target={results_b[0]['target']}, Impact.total={results_b[0]['impact_total']:.4f}")
+    decisions_b = sorted({r["sarcrp_decision"] for r in results_b})
+    print(f"SAR-CRP decisions across {len(REPORT_SEEDS)} seeds: {decisions_b}")
+    gains = [r["gain"] for r in results_b]
+    print(f"gain (J_old - J_new): mean={sum(gains) / len(gains):.4f}, max={max(gains):.4f}, "
+          f"tau (1% of J_old)={results_b[0]['tau']:.4f}")
+
+    log_run(
+        "run_existence_proof.py",
+        {"seeds": list(REPORT_SEEDS), "target_a": TARGET, "target_b": results_b[0]["target"]},
+        time.monotonic() - _start, [],
+    )
+
+
+if __name__ == "__main__":
+    main()
