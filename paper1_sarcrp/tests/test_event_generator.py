@@ -34,3 +34,11 @@ def test_generate_event_stream_is_seed_reproducible():
     events_a = generate_event_stream(queue, t_steps=30, uncertainty_level="high", rng=random.Random(7))
     events_b = generate_event_stream(queue, t_steps=30, uncertainty_level="high", rng=random.Random(7))
     assert [e.type for e in events_a] == [e.type for e in events_b]
+
+
+def test_fixed_confidence_overrides_sampled_confidence():
+    rng = random.Random(0)
+    queue = ["C1", "C2", "C3", "C4", "C5"]
+    events = generate_event_stream(queue, t_steps=30, uncertainty_level="high", rng=rng, fixed_confidence=0.4)
+    assert len(events) > 0
+    assert all(e.confidence == 0.4 for e in events)

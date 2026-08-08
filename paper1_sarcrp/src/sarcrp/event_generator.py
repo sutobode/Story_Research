@@ -77,6 +77,7 @@ def generate_event_stream(
     uncertainty_level: str,
     rng: random.Random,
     event_id_prefix: str = "e",
+    fixed_confidence: float | None = None,
 ) -> list[Event]:
     queue = list(initial_queue)
     events: list[Event] = []
@@ -87,7 +88,7 @@ def generate_event_stream(
 
         sampled = _sample_event_type(rng)
         severity = _sample_severity(uncertainty_level, rng)
-        confidence = _sample_confidence(uncertainty_level, rng)
+        confidence = fixed_confidence if fixed_confidence is not None else _sample_confidence(uncertainty_level, rng)
         old_queue = list(queue)
 
         if sampled == "ORDER_SWAP":
