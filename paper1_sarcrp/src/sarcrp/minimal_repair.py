@@ -1,3 +1,5 @@
+import copy
+
 from sarcrp.schemas import Plan
 from sarcrp.state_ops import find_stack
 
@@ -7,14 +9,19 @@ def minimal_feasibility_repair(plan_old: Plan, state_new, retrieval_queue_new: l
     in the retrieval queue or yard; leave everything else untouched. Destination
     re-pointing for now-invalid RELOCATE destinations is handled by
     local_search_repair's N1 operator (Task 10), which runs on this candidate's
-    output next."""
+    output next.
+
+    Kept actions are deep-copied before their step_index is renumbered --
+    reusing plan_old's Action objects directly and mutating them in place
+    would silently corrupt plan_old itself (the same object the caller keeps
+    using across the whole episode whenever the final decision is KEEP)."""
     repaired_actions = []
     for action in plan_old.actions:
         if action.type == "RETRIEVE" and action.container not in retrieval_queue_new:
             continue  # obsolete: container no longer needs retrieval
         if action.type == "RELOCATE" and find_stack(state_new, action.container) is None:
             continue  # obsolete: container no longer in the yard
-        repaired_actions.append(action)
+        repaired_actions.append(copy.deepcopy(action))
 
     for i, action in enumerate(repaired_actions):
         action.step_index = i

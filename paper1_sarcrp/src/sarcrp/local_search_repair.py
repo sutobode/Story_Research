@@ -67,7 +67,7 @@ def _neighbor_insert_urgent_support(
         container=blocker, source_stack=stack.id, dest_stack=dest,
         commit_status="planned", planned_time=0,
     )
-    new_actions = list(plan.actions)
+    new_actions = [copy.deepcopy(a) for a in plan.actions]
     new_actions.insert(frozen_count, new_action)
     for i, a in enumerate(new_actions):
         a.step_index = i
@@ -75,12 +75,15 @@ def _neighbor_insert_urgent_support(
 
 
 def _neighbor_remove_obsolete(plan: Plan, frozen_count: int, rng: random.Random) -> Plan | None:
-    """N4: drop one non-frozen action (models "remove no-longer-needed relocation")."""
+    """N4: drop one non-frozen action (models "remove no-longer-needed relocation").
+    Kept actions are deep-copied before renumbering, same reason as
+    minimal_repair.py: mutating shared Action objects in place risks
+    corrupting whatever other plan still holds a reference to them."""
     non_frozen = [i for i in range(len(plan.actions)) if i >= frozen_count]
     if not non_frozen:
         return None
     idx = rng.choice(non_frozen)
-    new_actions = [a for i, a in enumerate(plan.actions) if i != idx]
+    new_actions = [copy.deepcopy(a) for i, a in enumerate(plan.actions) if i != idx]
     for k, a in enumerate(new_actions):
         a.step_index = k
     return Plan(plan_id=plan.plan_id, created_at=plan.created_at, source=plan.source, actions=new_actions)
@@ -94,9 +97,9 @@ def _neighbor_replace_tail_with_solver(
     if len(plan.actions) <= frozen_count:
         return None
     k = rng.randint(frozen_count, len(plan.actions))
-    prefix = plan.actions[:k]
+    prefix = [copy.deepcopy(a) for a in plan.actions[:k]]
     tail_solution = solve_crp(state, retrieval_queue_new, time_limit_sec=1.0)
-    new_actions = list(prefix) + list(tail_solution.actions)
+    new_actions = prefix + list(tail_solution.actions)
     for i, a in enumerate(new_actions):
         a.step_index = i
     return Plan(plan_id=plan.plan_id, created_at=plan.created_at, source=plan.source, actions=new_actions)
