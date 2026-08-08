@@ -44,6 +44,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 from sarcrp.baselines import full_reoptimization, static_plan  # noqa: E402
 from sarcrp.crp_solver import solve_crp  # noqa: E402
+from sarcrp.event_generator import generate_event_stream  # noqa: E402
 from sarcrp.impact_estimator import compute_impact  # noqa: E402
 from sarcrp.objective import (  # noqa: E402
     compute_objective, data_confidence_cost, operational_cost, relocation_count,
@@ -174,6 +175,53 @@ def run_once_scale(seed: int) -> dict:
     }
 
 
+def run_multistep_scenario(seed: int, extra_steps: int = 10) -> dict:
+    """Scenario C: does SAR-CRP's real KEEP decision at the forced event
+    (Scenario B) compound into higher cost over the REST of the episode,
+    compared to a counterfactual that adopts the exact same candidate
+    SAR-CRP already considered best -- forced through by zeroing tau_frac
+    for that one decision only (not by changing candidate generation, the
+    trigger, or any other parameter)? Both paths face the SAME subsequent
+    random event stream (seeded), isolating the effect of the single
+    forced-event decision from everything after it."""
+    state, old_queue, target = build_scale_scenario()
+    plan_initial = solve_crp(state, old_queue, time_limit_sec=5.0)
+    forced_new_queue = force_urgent_insertion(old_queue, target)
+    urgent = [target]
+
+    subsequent_events = generate_event_stream(
+        forced_new_queue, extra_steps, "medium", random.Random(seed), fixed_confidence=SCALE_EVENT_CONFIDENCE,
+    )
+
+    def run_path(tau_frac_at_forced_event: float) -> float:
+        rng = random.Random(seed)
+        decision = replan(
+            state, plan_initial, old_queue, forced_new_queue, urgent, rng=rng,
+            conf_new=SCALE_EVENT_CONFIDENCE, tau_frac=tau_frac_at_forced_event, time_limit_sec=5.0,
+        )
+        plan, queue = decision.plan, forced_new_queue
+        total_cost = decision.j_new
+        for event in subsequent_events:
+            ev_urgent = [event.affected_containers[0]] if event.type == "URGENT_INSERTION" and event.affected_containers else []
+            step_decision = replan(
+                state, plan, queue, event.new_queue, ev_urgent, rng=rng,
+                conf_new=event.confidence, time_limit_sec=5.0,  # default tau_frac=0.01 for every later step
+            )
+            total_cost += step_decision.j_new
+            plan, queue = step_decision.plan, event.new_queue
+        return total_cost
+
+    real_total = run_path(tau_frac_at_forced_event=0.01)  # SAR-CRP's actual behavior (KEEP, per Scenario B)
+    counterfactual_total = run_path(tau_frac_at_forced_event=0.0)  # forced to adopt the considered-best candidate
+    return {
+        "seed": seed,
+        "real_total": real_total,
+        "counterfactual_total": counterfactual_total,
+        "counterfactual_better": counterfactual_total < real_total,
+        "diff": real_total - counterfactual_total,
+    }
+
+
 def main():
     _start = time.monotonic()
 
@@ -199,6 +247,14 @@ def main():
     gains = [r["gain"] for r in results_b]
     print(f"gain (J_old - J_new): mean={sum(gains) / len(gains):.4f}, max={max(gains):.4f}, "
           f"tau (1% of J_old)={results_b[0]['tau']:.4f}")
+
+    print("\n=== Scenario C: multi-step cascading cost (10 extra steps after the forced event) ===")
+    results_c = [run_multistep_scenario(seed) for seed in REPORT_SEEDS]
+    better_count = sum(r["counterfactual_better"] for r in results_c)
+    diffs = [r["diff"] for r in results_c]
+    print(f"counterfactual (early-fix) better on {better_count}/{len(REPORT_SEEDS)} seeds")
+    print(f"real_total - counterfactual_total: mean={sum(diffs) / len(diffs):.4f}, "
+          f"min={min(diffs):.4f}, max={max(diffs):.4f}")
 
     log_run(
         "run_existence_proof.py",

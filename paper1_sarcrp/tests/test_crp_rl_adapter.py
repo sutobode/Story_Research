@@ -82,3 +82,65 @@ def test_get_cached_model_returns_the_same_object_on_repeated_calls():
     model_a = get_cached_model("baselines/models/proposed/epoch(100).pt", "cpu")
     model_b = get_cached_model("baselines/models/proposed/epoch(100).pt", "cpu")
     assert model_a is model_b
+
+
+@pytest.mark.skipif(not CRP_RL_ROOT.is_dir(), reason="CRP_RL not cloned (see external/README.md)")
+def test_adapter_faithfully_reproduces_the_models_own_relocation_count():
+    """Independent validation, deliberately NOT scored under our own
+    objective.py: builds a random instance using CRP_RL's OWN generator
+    (its native tensor format, not ours), runs the model natively
+    (unpatched) to get CRP_RL's own reported cost, then runs our
+    recording-wrapped decode on the exact same input/model (greedy
+    sampling is deterministic, so it must reproduce the same trajectory)
+    and checks our own bookkeeping doesn't drop or duplicate a single
+    relocation the model actually decided on. This is what rules out "the
+    -48% comparison (Task 34 Part C) is an adapter bug" as an explanation,
+    independent of whatever this project's own objective thinks of the
+    result."""
+    import torch
+    from sarcrp.crp_rl_adapter import get_cached_model, _run_decode_recording_moves, moves_to_plan
+    from sarcrp.objective import relocation_count
+
+    model = get_cached_model("baselines/models/proposed/epoch(100).pt", "cpu")
+    from generator.generator import Generator  # CRP_RL_ROOT is on sys.path after get_cached_model
+
+    n_containers, n_bays, n_rows, n_tiers = 50, 10, 1, 6  # matches crp_rl_scale_instance.json: max_tier=6 leaves
+    # headroom above 5 filled tiers so a relocation destination actually exists (50 containers in exactly
+    # 50 slots -- n_tiers=5 -- leaves every stack full, and the model has nowhere legal to relocate to)
+    gen = Generator(seed=42, n_samples=1, layout=(n_containers, n_bays, n_rows, n_tiers), inst_type="random", device=None)
+    x = gen.data  # CRP_RL's own native tensor, shape (1, n_bays, n_rows, n_tiers)
+
+    with torch.no_grad():
+        native_cost, _ll = model(x, None)
+    native_cost = float(native_cost.item() if hasattr(native_cost, "item") else native_cost)
+    assert native_cost == native_cost  # not NaN
+    assert native_cost > 0  # a real, non-degenerate cost for a 50-container instance
+
+    moves = _run_decode_recording_moves(model, x)
+    assert len(moves) > 0  # a random 50-container instance should need real relocations
+
+    # Rebuild an equivalent YardState from the SAME tensor (rank r -> container "C{r:03d}").
+    rank_to_container: dict[int, str] = {}
+    stacks = []
+    for b in range(n_bays):
+        tiered = []
+        for t in range(n_tiers):
+            rank = int(x[0, b, 0, t].item())
+            if rank == 0:
+                continue
+            name = f"C{rank:03d}"
+            rank_to_container[rank] = name
+            tiered.append((t, name))
+        tiered.sort(key=lambda item: item[0])
+        stacks.append(Stack(id=f"S{b + 1}", containers=[name for _, name in tiered], max_tier=n_tiers))
+    retrieval_queue = [rank_to_container[r] for r in sorted(rank_to_container)]
+    yard_state = YardState(
+        instance_id="validation", time_step=0, layout=Layout(num_stacks=n_bays, max_tier=n_tiers),
+        stacks=stacks, container_attributes={}, retrieval_queue=retrieval_queue,
+        pickup_prob={}, data_timestamp=0, state_confidence=1.0,
+    )
+
+    plan = moves_to_plan(yard_state, retrieval_queue, moves)
+    assert relocation_count(plan) == len(moves)  # every recorded move survives replay -- none dropped or duplicated
+    retrieved = [a.container for a in plan.actions if a.type == "RETRIEVE"]
+    assert sorted(retrieved) == sorted(retrieval_queue)  # every container still retrieved exactly once
