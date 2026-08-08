@@ -42,12 +42,16 @@ def replan(
     time_limit_sec: float = 5.0,
     rng: random.Random | None = None,
     conf_new: float = 1.0,
+    use_local_search: bool = True,
+    impact_weights: dict | None = None,
 ) -> ReplanDecision:
-    """Algorithm SAR-CRP v2 Core (spec 18), steps 1-9."""
+    """Algorithm SAR-CRP v2 Core (spec 18), steps 1-9. use_local_search=False
+    and impact_weights are ablation hooks (spec 25 A4, A6) -- not used by the
+    default SAR-CRP configuration."""
     rng = rng or random.Random()
 
     # Steps 1-2: confidence already folded into conf_new by the caller; estimate impact.
-    impact = compute_impact(old_queue, new_queue, state_t, state_t, plan_old, conf_new=conf_new)
+    impact = compute_impact(old_queue, new_queue, state_t, state_t, plan_old, conf_new=conf_new, weights=impact_weights)
 
     # Step 3: trigger check.
     if impact.total < theta_impact:
@@ -61,15 +65,17 @@ def replan(
     # Step 5: generate candidates C0-C3.
     c0 = plan_old
     c1 = minimal_feasibility_repair(plan_old, state_t, new_queue)
-    c2 = local_search_repair(
-        c1, plan_old, state_t, new_queue, frozen_count, rng,
-        urgent_containers=urgent_containers, conf_new=conf_new, time_limit_sec=time_limit_sec,
-    )
+    candidates = [c0, c1]
+    if use_local_search:
+        c2 = local_search_repair(
+            c1, plan_old, state_t, new_queue, frozen_count, rng,
+            urgent_containers=urgent_containers, conf_new=conf_new, time_limit_sec=time_limit_sec,
+        )
+        candidates.append(c2)
     tail_solution = solve_crp(state_t, new_queue, time_limit_sec=time_limit_sec)
     c3 = Plan(plan_id=f"{plan_old.plan_id}_c3", created_at=plan_old.created_at, source="frozen+crp_tail",
               actions=list(frozen.actions) + list(tail_solution.actions))
-
-    candidates = [c0, c1, c2, c3]
+    candidates.append(c3)
 
     # Step 6: score every candidate.
     scored = [(_score_candidate(c, plan_old, frozen_count, urgent_containers, conf_new), c) for c in candidates]

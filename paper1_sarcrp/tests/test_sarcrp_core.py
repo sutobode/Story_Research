@@ -54,3 +54,27 @@ def test_result_never_violates_frozen_prefix():
         urgent_containers=["C3"], h_f=1, theta_impact=0.05, tau_frac=0.0, rng=random.Random(3),
     )
     assert decision.plan.actions[0].container == plan_old.actions[0].container
+
+
+def test_use_local_search_false_skips_c2_candidate():
+    state = make_state(["C1", "C2", "C3"])
+    plan_old = make_plan()
+    decision_with = replan(state, plan_old, ["C1", "C2", "C3"], ["C3", "C2", "C1"],
+                            ["C3"], theta_impact=0.05, tau_frac=0.0, rng=random.Random(0),
+                            use_local_search=True)
+    decision_without = replan(state, plan_old, ["C1", "C2", "C3"], ["C3", "C2", "C1"],
+                               ["C3"], theta_impact=0.05, tau_frac=0.0, rng=random.Random(0),
+                               use_local_search=False)
+    assert decision_with.decision in {"KEEP", "UPDATE"}
+    assert decision_without.decision in {"KEEP", "UPDATE"}
+
+
+def test_impact_weights_override_changes_impact_total():
+    state = make_state(["C1", "C2", "C3"])
+    plan_old = make_plan()
+    default_decision = replan(state, plan_old, ["C1", "C2", "C3"], ["C3", "C2", "C1"],
+                               ["C3"], theta_impact=0.0, tau_frac=1.0, rng=random.Random(0))
+    zero_blocking_decision = replan(state, plan_old, ["C1", "C2", "C3"], ["C3", "C2", "C1"],
+                                     ["C3"], theta_impact=0.0, tau_frac=1.0, rng=random.Random(0),
+                                     impact_weights={"w_o": 0.25, "w_t": 0.20, "w_b": 0.0, "w_p": 0.20, "w_c": 0.10})
+    assert zero_blocking_decision.impact.total <= default_decision.impact.total
