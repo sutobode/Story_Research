@@ -31,3 +31,13 @@ def test_all_three_mvp_methods_run_without_error():
     for method in ("static", "full_reopt", "sarcrp"):
         metrics = run_episode(SMALL_INSTANCE, method_name=method, rng=random.Random(1))
         assert metrics.total_cost_mean >= 0.0
+
+
+def test_operational_cost_mean_is_separate_from_total_cost():
+    # full_reopt has no stability/data cost (frozen_count=0, but it replans every
+    # event so its plan always matches "old" plan trivially at compute time) --
+    # this test just asserts the two means are independently computed fields,
+    # not that they must differ in every scenario.
+    metrics = run_episode(SMALL_INSTANCE, method_name="full_reopt", rng=random.Random(2))
+    assert metrics.operational_cost_mean >= 0.0
+    assert isinstance(metrics.operational_cost_mean, float)

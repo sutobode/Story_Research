@@ -15,6 +15,7 @@ class EpisodeMetrics:
     relocation_count_total: int
     changed_actions_total: int
     total_cost_mean: float
+    operational_cost_mean: float
     runtime_mean_sec: float
     fallback_rate: float
 
@@ -49,6 +50,7 @@ def run_episode(instance: dict, method_name: str, rng: random.Random) -> Episode
     events = generate_event_stream(queue, instance["t_steps"], instance["uncertainty_level"], rng)
 
     total_costs = []
+    op_costs = []
     runtimes = []
     changed_actions_total = 0
     fallback_count = 0
@@ -84,6 +86,7 @@ def run_episode(instance: dict, method_name: str, rng: random.Random) -> Episode
         data = data_confidence_cost(new_plan, plan, event.confidence)
         j = compute_objective(op, 0.0 if violated else stab, data)
         total_costs.append(j)
+        op_costs.append(op)
         runtimes.append(runtime)
 
         plan = new_plan
@@ -94,6 +97,7 @@ def run_episode(instance: dict, method_name: str, rng: random.Random) -> Episode
         relocation_count_total=relocation_count(plan),
         changed_actions_total=changed_actions_total,
         total_cost_mean=sum(total_costs) / len(total_costs) if total_costs else 0.0,
+        operational_cost_mean=sum(op_costs) / len(op_costs) if op_costs else 0.0,
         runtime_mean_sec=sum(runtimes) / len(runtimes) if runtimes else 0.0,
         fallback_rate=fallback_count / denom if denom else 0.0,
     )
