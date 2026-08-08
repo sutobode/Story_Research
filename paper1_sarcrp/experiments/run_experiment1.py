@@ -52,17 +52,35 @@ def run_factorial(instance: dict, methods=METHODS, seeds=SEEDS) -> list[dict]:
     return rows
 
 
-def run_significance_tests(rows: list[dict], baseline_methods=("static", "full_reopt", "periodic", "event_triggered_no_stability", "mpc")) -> dict:
+def run_significance_tests(
+    rows: list[dict], uncertainty_level: str,
+    baseline_methods=("static", "full_reopt", "periodic", "event_triggered_no_stability", "mpc"),
+    freeze_size: int = 3, lam: float = 1.0,
+) -> dict:
     """spec 23.6: SAR-CRP vs each of B1-B5, paired by seed, Holm-Bonferroni
-    corrected across the len(baseline_methods) comparisons, with Cliff's delta."""
-    by_seed_sarcrp = {r["seed"]: r["total_cost_mean"] for r in rows if r["method"] == "sarcrp"}
+    corrected across the len(baseline_methods) comparisons, with Cliff's delta.
+
+    `rows` spans the full 3x3x3 factorial grid, so it must be filtered down to
+    one (uncertainty_level, freeze_size, lam) cell before pairing by seed --
+    collapsing straight into a seed-keyed dict without filtering first (a real
+    bug this replaced) silently kept only whichever grid cell happened to be
+    iterated last, not any deliberate operating point. freeze_size=3, lam=1.0
+    are spec 48's own SAR-CRP defaults (H_f, lambda), so that is this
+    function's "headline" operating point unless told otherwise. Baseline
+    methods (static/full_reopt/periodic/mpc) don't depend on freeze_size/lam
+    at all -- run_episode never receives those kwargs for them -- so their
+    rows are identical across every grid cell for the same
+    (uncertainty_level, seed); only sarcrp/event_triggered_no_stability
+    actually vary with the filter."""
+    cell = [r for r in rows if r["uncertainty_level"] == uncertainty_level and r["freeze_size"] == freeze_size and r["lam"] == lam]
+    by_seed_sarcrp = {r["seed"]: r["total_cost_mean"] for r in cell if r["method"] == "sarcrp"}
     seeds_sorted = sorted(by_seed_sarcrp)
     sarcrp_values = [by_seed_sarcrp[s] for s in seeds_sorted]
 
     raw_p_values = []
     per_baseline = {}
     for baseline in baseline_methods:
-        by_seed_baseline = {r["seed"]: r["total_cost_mean"] for r in rows if r["method"] == baseline}
+        by_seed_baseline = {r["seed"]: r["total_cost_mean"] for r in cell if r["method"] == baseline}
         baseline_values = [by_seed_baseline[s] for s in seeds_sorted if s in by_seed_baseline]
         matched_sarcrp = [by_seed_sarcrp[s] for s in seeds_sorted if s in by_seed_baseline]
         wilcoxon_result = wilcoxon_signed_rank(matched_sarcrp, baseline_values)
@@ -97,23 +115,27 @@ def main():
         writer.writerows(rows)
     print(f"Wrote {len(rows)} rows to {out_path}")
 
-    significance = run_significance_tests(rows)
     sig_path = results_dir / "experiment1_significance.csv"
     with sig_path.open("w", newline="") as f:
-        f.write("baseline,p_value,n_pairs,n_nonzero_pairs,p_value_holm_significant,cliffs_delta\n")
+        f.write("uncertainty_level,baseline,p_value,n_pairs,n_nonzero_pairs,p_value_holm_significant,cliffs_delta\n")
+        for uncertainty_level in FACTOR_GRID["uncertainty_level"]:
+            significance = run_significance_tests(rows, uncertainty_level=uncertainty_level)
+            for baseline, stats_row in significance.items():
+                if baseline == "_sarcrp_ci":
+                    continue
+                f.write(f"{uncertainty_level},{baseline},{stats_row['p_value']:.6f},{stats_row['n_pairs']},{stats_row['n_nonzero_pairs']},"
+                        f"{stats_row['p_value_holm_significant']},{stats_row['cliffs_delta']:.4f}\n")
+    print(f"Wrote significance table to {sig_path}")
+    for uncertainty_level in FACTOR_GRID["uncertainty_level"]:
+        significance = run_significance_tests(rows, uncertainty_level=uncertainty_level)
+        print(f"-- uncertainty_level={uncertainty_level} (freeze_size=3, lam=1.0, spec 48 defaults) --")
         for baseline, stats_row in significance.items():
             if baseline == "_sarcrp_ci":
                 continue
-            f.write(f"{baseline},{stats_row['p_value']:.6f},{stats_row['n_pairs']},{stats_row['n_nonzero_pairs']},"
-                    f"{stats_row['p_value_holm_significant']},{stats_row['cliffs_delta']:.4f}\n")
-    print(f"Wrote significance table to {sig_path}")
-    for baseline, stats_row in significance.items():
-        if baseline == "_sarcrp_ci":
-            continue
-        print(f"SAR-CRP vs {baseline}: p={stats_row['p_value']:.4f} "
-              f"(n_nonzero_pairs={stats_row['n_nonzero_pairs']}/{stats_row['n_pairs']}, "
-              f"Holm-significant={stats_row['p_value_holm_significant']}), "
-              f"Cliff's delta={stats_row['cliffs_delta']:.3f}")
+            print(f"SAR-CRP vs {baseline}: p={stats_row['p_value']:.4f} "
+                  f"(n_nonzero_pairs={stats_row['n_nonzero_pairs']}/{stats_row['n_pairs']}, "
+                  f"Holm-significant={stats_row['p_value_holm_significant']}), "
+                  f"Cliff's delta={stats_row['cliffs_delta']:.3f}")
 
     log_run("run_experiment1.py", {"seeds": list(SEEDS), "factor_grid": FACTOR_GRID, "methods": list(METHODS)},
             time.monotonic() - _start, [str(out_path), str(sig_path)])

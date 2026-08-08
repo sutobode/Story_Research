@@ -47,14 +47,46 @@ def test_run_factorial_threads_freeze_size_and_lam_into_run_episode(monkeypatch)
     assert lam_values_seen == set(FACTOR_GRID["lam"])
 
 
+def _row(method, seed, total_cost_mean, uncertainty_level="medium", freeze_size=3, lam=1.0):
+    return {
+        "method": method, "seed": seed, "total_cost_mean": total_cost_mean,
+        "uncertainty_level": uncertainty_level, "freeze_size": freeze_size, "lam": lam,
+    }
+
+
 def test_run_significance_tests_reports_holm_bonferroni_corrected_flags():
-    rows = [
-        {"method": "static", "seed": s, "total_cost_mean": 7.0 + 0.01 * s} for s in range(20)
-    ] + [
-        {"method": "sarcrp", "seed": s, "total_cost_mean": 6.0 + 0.01 * s} for s in range(20)
-    ]
-    result = run_significance_tests(rows, baseline_methods=("static",))
+    rows = [_row("static", s, 7.0 + 0.01 * s) for s in range(20)] + [_row("sarcrp", s, 6.0 + 0.01 * s) for s in range(20)]
+    result = run_significance_tests(rows, uncertainty_level="medium", baseline_methods=("static",))
     assert "static" in result
     assert "p_value" in result["static"]
     assert "p_value_holm_significant" in result["static"]
     assert "cliffs_delta" in result["static"]
+
+
+def test_run_significance_tests_only_uses_the_requested_grid_cell():
+    # Regression guard for a real bug: collapsing the full factorial grid
+    # into a seed-keyed dict without filtering first silently keeps only
+    # whichever grid cell happens to be iterated last, not the deliberate
+    # (uncertainty_level, freeze_size=3, lam=1.0) default operating point
+    # (spec 48's own H_f/lambda defaults). Build two grid cells with
+    # deliberately different sarcrp values for the same seeds; only the
+    # freeze_size=3, lam=1.0 cell's values should feed the test.
+    rows = (
+        [_row("static", s, 7.0, freeze_size=3, lam=1.0) for s in range(20)]
+        + [_row("sarcrp", s, 6.0, freeze_size=3, lam=1.0) for s in range(20)]  # the requested cell
+        + [_row("static", s, 7.0, freeze_size=5, lam=0.0) for s in range(20)]
+        + [_row("sarcrp", s, 999.0, freeze_size=5, lam=0.0) for s in range(20)]  # a different cell -- must be ignored
+    )
+    result = run_significance_tests(rows, uncertainty_level="medium", baseline_methods=("static",), freeze_size=3, lam=1.0)
+    assert result["_sarcrp_ci"][0] == 6.0  # mean of the requested cell's sarcrp values, not 999.0
+
+
+def test_run_significance_tests_filters_by_uncertainty_level():
+    rows = (
+        [_row("static", s, 7.0, uncertainty_level="low") for s in range(20)]
+        + [_row("sarcrp", s, 6.0, uncertainty_level="low") for s in range(20)]
+        + [_row("static", s, 7.0, uncertainty_level="high") for s in range(20)]
+        + [_row("sarcrp", s, 999.0, uncertainty_level="high") for s in range(20)]
+    )
+    result = run_significance_tests(rows, uncertainty_level="low", baseline_methods=("static",))
+    assert result["_sarcrp_ci"][0] == 6.0

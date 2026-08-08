@@ -1,0 +1,16 @@
+uncertainty_level,baseline,p_value,n_pairs,n_nonzero_pairs,p_value_holm_significant,cliffs_delta
+low,static,1.000000,20,0,False,0.0000
+low,full_reopt,0.000002,20,20,True,-1.0000
+low,periodic,0.000002,20,20,True,-1.0000
+low,event_triggered_no_stability,1.000000,20,0,False,0.0000
+low,mpc,0.000002,20,20,True,-1.0000
+medium,static,1.000000,20,0,False,0.0000
+medium,full_reopt,0.000002,20,20,True,-1.0000
+medium,periodic,0.000002,20,20,True,-1.0000
+medium,event_triggered_no_stability,1.000000,20,0,False,0.0000
+medium,mpc,0.000002,20,20,True,-1.0000
+high,static,1.000000,20,0,False,0.0000
+high,full_reopt,0.000002,20,20,True,-1.0000
+high,periodic,0.000002,20,20,True,-1.0000
+high,event_triggered_no_stability,1.000000,20,0,False,0.0000
+high,mpc,0.000002,20,20,True,-1.0000
