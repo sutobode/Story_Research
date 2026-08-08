@@ -60,6 +60,11 @@ def test_run_episode_supports_mpc_method():
     assert metrics.total_cost_mean >= 0.0
 
 
+def test_run_episode_supports_sarcrp_lookahead_method():
+    metrics = run_episode(SMALL_INSTANCE, method_name="sarcrp_lookahead", rng=random.Random(0))
+    assert metrics.total_cost_mean >= 0.0
+
+
 def test_run_episode_supports_ablation_methods():
     for ablation_method in ("sarcrp_A1_no_trigger", "sarcrp_A3_no_stability", "sarcrp_A6_no_blocking_impact"):
         metrics = run_episode(SMALL_INSTANCE, method_name=ablation_method, rng=random.Random(0))

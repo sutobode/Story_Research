@@ -70,6 +70,7 @@ def run_episode(
     fallback_count = 0
     invalid_flags = []
     timeout_flags = []
+    carried_gain = 0.0  # only threaded by method_name == "sarcrp_lookahead"
 
     for event in events:
         new_queue = event.new_queue
@@ -97,6 +98,17 @@ def run_episode(
                                time_limit_sec=time_limit_sec, **replan_kwargs)
             new_plan = decision.plan
             fallback = decision.decision == "KEEP"
+        elif method_name == "sarcrp_lookahead":
+            # Same algorithm as "sarcrp", but threads carried_gain across
+            # events (spec 9's Step 8 extended per the existence-proof
+            # report's Scenario C finding: the single-step margin is
+            # myopic). "sarcrp" itself never passes carried_gain, so its
+            # own numbers (Experiment 1/3/4) are unaffected by this.
+            decision = replan(state, plan, queue, new_queue, urgent, rng=rng, conf_new=event.confidence,
+                               time_limit_sec=time_limit_sec, carried_gain=carried_gain, **replan_kwargs)
+            new_plan = decision.plan
+            fallback = decision.decision == "KEEP"
+            carried_gain = decision.carried_gain_next
         elif method_name == "periodic":
             new_plan = periodic_replan(state, new_queue, plan, event_index=len(total_costs) + 1, time_limit_sec=time_limit_sec)
             fallback = new_plan is plan

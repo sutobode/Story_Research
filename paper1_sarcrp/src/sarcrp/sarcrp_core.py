@@ -19,6 +19,7 @@ class ReplanDecision:
     impact: ImpactBreakdown
     j_old: float
     j_new: float
+    carried_gain_next: float = 0.0  # feed into the next call's carried_gain (lookahead margin, see _apply_fallback_margin)
 
 
 def _build_c3(plan_old: Plan, frozen: Plan, tail_solution: Plan) -> Plan:
@@ -56,6 +57,35 @@ def _score_candidate(plan: Plan, plan_old: Plan, frozen_count: int, urgent_conta
     return compute_objective(op, stab, data)
 
 
+def _apply_fallback_margin(j_old: float, j_best: float, tau: float, carried_gain: float) -> tuple[str, float]:
+    """Step 8 (spec 9's EstimatedGain > SwitchingCost + tau), extended with
+    a carried-gain hysteresis motivated by the existence-proof report's
+    Scenario C finding: the single-step margin is myopic, comparing only
+    the immediate decision's own gain against tau with no memory of
+    genuine-but-sub-margin improvements passed up before. A real,
+    positive gain that doesn't clear tau this round is remembered and
+    added to the NEXT round's gain (via the caller threading
+    ReplanDecision.carried_gain_next back in as the next call's
+    carried_gain), so an improvement that keeps recurring eventually
+    clears tau instead of being discarded every single time. A round
+    whose own best candidate is not an improvement at all (raw_gain<=0,
+    including no viable candidate) never triggers an update by itself --
+    carried_gain is a bonus on top of a genuine improvement this round,
+    never a standalone reason to adopt a worse plan -- and leaves the
+    carry untouched rather than eroding it.
+
+    carried_gain=0.0 (replan()'s default) reproduces spec 9's original,
+    memoryless criterion exactly."""
+    if j_best == float("inf"):
+        return "KEEP", carried_gain
+    raw_gain = j_old - j_best
+    if raw_gain <= 0:
+        return "KEEP", carried_gain
+    if raw_gain + carried_gain <= tau:
+        return "KEEP", carried_gain + raw_gain
+    return "UPDATE", 0.0
+
+
 def replan(
     state_t,
     plan_old: Plan,
@@ -73,12 +103,20 @@ def replan(
     use_local_search: bool = True,
     impact_weights: dict | None = None,
     solver=None,
+    carried_gain: float = 0.0,
 ) -> ReplanDecision:
     """Algorithm SAR-CRP v2 Core (spec 18), steps 1-9. use_local_search=False
     and impact_weights are ablation hooks (spec 25 A4, A6) -- not used by the
     default SAR-CRP configuration. `solver` defaults to the greedy heuristic
     and is used for candidate C3's tail (spec 43/33 -- pass
-    crp_rl_adapter.solve_crp_via_crp_rl to use the real trained model)."""
+    crp_rl_adapter.solve_crp_via_crp_rl to use the real trained model).
+    `carried_gain` defaults to 0.0, reproducing the original memoryless
+    Step 8 exactly -- callers that want the lookahead margin (see
+    _apply_fallback_margin) must explicitly thread
+    ReplanDecision.carried_gain_next from the previous call back in
+    (simulator.py's "sarcrp_lookahead" method does this; the default
+    "sarcrp" method does not, so Experiment 1/3/4's numbers are
+    unaffected)."""
     rng = rng or random.Random()
     active_solver = solver or solve_crp
 
@@ -88,7 +126,8 @@ def replan(
     # Step 3: trigger check.
     if impact.total < theta_impact:
         j_old = _score_candidate(plan_old, plan_old, 0, urgent_containers, conf_new, state_t)
-        return ReplanDecision(decision="KEEP", plan=plan_old, impact=impact, j_old=j_old, j_new=j_old)
+        return ReplanDecision(decision="KEEP", plan=plan_old, impact=impact, j_old=j_old, j_new=j_old,
+                               carried_gain_next=carried_gain)
 
     # Step 4: split plan.
     frozen, _tail = split_plan(plan_old, h_f)
@@ -116,10 +155,13 @@ def replan(
     j_best, p_best = min(scored, key=lambda pair: pair[0])
     j_old = _score_candidate(plan_old, plan_old, 0, urgent_containers, conf_new, state_t)
 
-    # Step 8: fallback check.
+    # Step 8: fallback check (extended with the carried-gain lookahead margin).
     tau = tau_frac * j_old if j_old not in (0.0, float("inf")) else 0.0
-    if j_best == float("inf") or (j_old - j_best) <= tau:
-        return ReplanDecision(decision="KEEP", plan=plan_old, impact=impact, j_old=j_old, j_new=j_best)
+    decision, carried_gain_next = _apply_fallback_margin(j_old, j_best, tau, carried_gain)
+    if decision == "KEEP":
+        return ReplanDecision(decision="KEEP", plan=plan_old, impact=impact, j_old=j_old, j_new=j_best,
+                               carried_gain_next=carried_gain_next)
 
     # Step 9: update.
-    return ReplanDecision(decision="UPDATE", plan=p_best, impact=impact, j_old=j_old, j_new=j_best)
+    return ReplanDecision(decision="UPDATE", plan=p_best, impact=impact, j_old=j_old, j_new=j_best,
+                           carried_gain_next=carried_gain_next)

@@ -1,6 +1,7 @@
+import math
 import random
 from sarcrp.schemas import Layout, Stack, YardState, Action, Plan
-from sarcrp.sarcrp_core import replan, _build_c3, _score_candidate
+from sarcrp.sarcrp_core import replan, _build_c3, _score_candidate, _apply_fallback_margin
 
 
 def make_state(queue):
@@ -130,6 +131,83 @@ def test_score_candidate_penalizes_invalid_plans_instead_of_hardcoding_valid():
     ])
     score = _score_candidate(invalid_plan, plan_old, frozen_count=0, urgent_containers=[], conf_new=1.0, state=state)
     assert score >= 1e6  # spec 11's M_inf, not a small/normal-looking cost
+
+
+def test_apply_fallback_margin_keeps_and_carries_a_subthreshold_gain():
+    # Motivated by Scenario C (existence-proof report): the single-step
+    # margin is myopic -- a genuine but sub-tau improvement is currently
+    # discarded outright every time it recurs. carried_gain remembers it
+    # instead of losing it.
+    decision, carried_next = _apply_fallback_margin(j_old=61.49, j_best=60.98, tau=0.615, carried_gain=0.0)
+    assert decision == "KEEP"
+    assert math.isclose(carried_next, 0.51, abs_tol=1e-2)
+
+
+def test_apply_fallback_margin_updates_once_carried_plus_new_gain_clears_tau():
+    decision, carried_next = _apply_fallback_margin(j_old=61.49, j_best=60.98, tau=0.615, carried_gain=0.514)
+    assert decision == "UPDATE"
+    assert carried_next == 0.0  # resets once cashed in
+
+
+def test_apply_fallback_margin_returns_keep_when_no_viable_candidate():
+    decision, carried_next = _apply_fallback_margin(j_old=10.0, j_best=float("inf"), tau=0.1, carried_gain=2.0)
+    assert decision == "KEEP"
+    assert carried_next == 2.0  # unchanged -- no new information either way
+
+
+def test_apply_fallback_margin_does_not_erode_carry_on_a_negative_round():
+    # This round's own best candidate is worse than keeping -- must not
+    # let it cancel out gains genuinely passed up in earlier rounds.
+    decision, carried_next = _apply_fallback_margin(j_old=10.0, j_best=11.0, tau=0.1, carried_gain=2.0)
+    assert decision == "KEEP"
+    assert carried_next == 2.0
+
+
+def test_apply_fallback_margin_matches_original_spec9_behavior_with_zero_carry():
+    # Original Step 8 (spec 9): KEEP if j_best==inf or (j_old-j_best)<=tau,
+    # else UPDATE. carried_gain=0.0 (the default) must reproduce this
+    # exactly -- Experiment 1/3/4's already-reported numbers depend on it.
+    decision, _ = _apply_fallback_margin(j_old=10.0, j_best=8.0, tau=0.5, carried_gain=0.0)
+    assert decision == "UPDATE"  # gain=2.0 > tau=0.5
+    decision2, _ = _apply_fallback_margin(j_old=10.0, j_best=9.8, tau=0.5, carried_gain=0.0)
+    assert decision2 == "KEEP"  # gain=0.2 <= tau=0.5
+
+
+def test_replan_default_carried_gain_reproduces_original_behavior():
+    # replan() without carried_gain/carried_gain_next must be indistinguishable
+    # from before this feature existed -- Experiment 1/3/4 never pass it.
+    state = make_state(["C1", "C2", "C3"])
+    plan_old = make_plan()
+    decision = replan(state, plan_old, ["C1", "C2", "C3"], ["C3", "C2", "C1"], ["C3"],
+                       theta_impact=0.05, tau_frac=0.0, rng=random.Random(0))
+    # Starting from carried_gain=0.0 (the default), every branch of
+    # _apply_fallback_margin returns 0.0 back out: UPDATE resets it,
+    # KEEP-with-no-gain-this-round leaves an already-zero carry untouched.
+    assert decision.carried_gain_next == 0.0
+
+
+def test_replan_threads_carried_gain_into_the_fallback_margin_and_returns_its_result(monkeypatch):
+    # Verifies the wiring (replan passes its own carried_gain argument
+    # into _apply_fallback_margin, and returns whatever that function
+    # decides) without depending on any specific scenario's numeric gain
+    # -- test_apply_fallback_margin_* above already covers that function's
+    # own logic precisely.
+    import sarcrp.sarcrp_core as sarcrp_core_module
+
+    state = make_state(["C1", "C2", "C3"])
+    plan_old = make_plan()
+    captured = {}
+
+    def spy_margin(j_old, j_best, tau, carried_gain):
+        captured["carried_gain_in"] = carried_gain
+        return "UPDATE", 999.0  # a distinctive sentinel, otherwise unreachable
+
+    monkeypatch.setattr(sarcrp_core_module, "_apply_fallback_margin", spy_margin)
+    decision = replan(state, plan_old, ["C1", "C2", "C3"], ["C3", "C2", "C1"], ["C3"],
+                       theta_impact=0.05, carried_gain=7.5, rng=random.Random(0))
+    assert captured["carried_gain_in"] == 7.5
+    assert decision.decision == "UPDATE"
+    assert decision.carried_gain_next == 999.0
 
 
 def test_replan_accepts_a_custom_solver():
