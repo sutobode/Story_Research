@@ -164,6 +164,88 @@ real reoptimization/instability cost every event, while SAR-CRP correctly
 recognizes (via the trigger) that repairing is not worth it on this
 benchmark and defaults to Static's behavior instead.
 
+\section{Existence-Proof Experiment: Does the Trigger+Repair Mechanism Ever Activate?}
+\label{sec:existence-proof}
+
+Experiments 1, 3, and 4 all show SAR-CRP tying Static exactly (0/20
+nonzero seed pairs) on every uncertainty level, layout, and confidence
+level tested. That is a benchmark-calibration fact (\S20 SC4: mean event
+impact 0.090, well under $\theta_{\text{impact}}=0.30$), not proof the
+trigger+repair mechanism itself never works. This experiment settles the
+question directly with two deliberately engineered, deterministic
+high-impact events (\texttt{run\_existence\_proof.py}) instead of a random
+stream: a container is buried under blockers and placed last in the
+initial retrieval priority, then a single forced urgent-insertion event
+promotes it to top priority.
+
+\textbf{Three real implementation bugs were caught and fixed while
+building this scenario} (each with its own regression test, all
+independent of and prior to any result reported here): (1) \texttt{I\_blocking}
+deviated from spec \S44.3's union(old,new) top-k formula (\S\ref{sec:limitations} below
+explains why it is nonetheless still always 0 in this suite); (2)
+\texttt{local\_search\_repair}'s epsilon-greedy acceptance could wander to
+a plan worse than its own starting candidate and return it directly, since
+the best-ever-seen plan was never tracked separately from the exploratory
+walk state; (3) candidate C3 (frozen prefix + a fresh solver call on the
+tail) never renumbered \texttt{step\_index} after concatenation, so it
+collided with the frozen prefix's own indices and was fabricated as
+``frozen-violated'' ($p_f=\infty$) on every single call with $H_f>0$ ---
+i.e.\ every experiment in this report, since spec \S48's own default is
+$H_f=3$. Separately, even after renumbering, C3's tail was solved against
+the \emph{original} state and the \emph{full} queue rather than the state
+resulting from the frozen prefix, duplicating work already covered (the
+same defect independently existed in \texttt{baselines.mpc\_receding\_horizon}
+and local search's N5 operator; all three now share one fix,
+\texttt{freeze\_horizon.apply\_frozen\_prefix}).
+
+\textbf{Scenario A (7 containers).} Impact reaches 0.325 ($\ge\theta_{\text{impact}}$),
+so the trigger correctly fires. But no candidate (C1, C2, or the now-fixed
+C3) can win: the achievable operational gain (one urgent container's delay
+reduction, bounded by $\beta=0.5$ on a 7-action plan) is smaller than the
+minimum stability + data-confidence cost of any repair that touches the
+plan's tail at all. This holds at every $H_f\in\{0,1,2,3\}$ and every
+$\lambda\in\{0,0.5,1.0\}$ checked directly --- so it is not a freeze-horizon
+or stability-weight artifact. SAR-CRP keeping here is the objective
+functioning correctly, not a missed opportunity.
+
+\begin{table}[h]
+\centering
+\small
+\begin{tabular}{lrrr}
+\hline
+Method & $J$ mean & RetrievalDelayNorm(target) mean & Relocations mean \\
+\hline
+Static & 0.375 & 0.750 & 0.00 \\
+SAR-CRP & 0.375 & 0.750 & 0.00 \\
+Full Reoptimization & 32.156 & 0.167 & 4.00 \\
+\hline
+\end{tabular}
+\caption{Scenario A, 20 seeds. Full Reoptimization cuts the target's delay but at $\sim$86$\times$ the total cost.}
+\end{table}
+
+\textbf{Scenario B (50 containers, reusing \texttt{crp\_rl\_scale\_instance.json}
+as-is --- no new instance tuning).} The same forced-promotion pattern at
+industrially-relevant scale, with the event's confidence set to 0.5 (squarely
+inside \texttt{event\_generator}'s own high-uncertainty confidence range,
+0.20--0.80 --- not a value chosen to make this work). Impact reaches 0.301.
+This time a \emph{real, positive} improving candidate is found on every one
+of the 20 seeds (mean gain 0.489, max 0.514) --- but it falls just under
+spec \S9's own fallback margin, $\tau = 0.01 \times J(P_{old}) = 0.615$, on
+every single seed. This is the precise, well-characterized boundary this
+suite's random benchmark never got close enough to observe: the full
+pipeline (impact estimator, trigger, C0--C3 candidate generation, local
+search, fallback margin) all function end-to-end exactly as spec \S9/\S18
+describe, and the one parameter standing between KEEP and UPDATE here is
+the 1\%-of-$J_{old}$ fallback margin --- a deliberately conservative
+guard against low-value churn, not a defect.
+
+\textbf{After these fixes, Experiment 1/3/4's already-reported numbers were
+re-verified by re-running all three}: identical to the numbers in this
+report to the last reported digit. This is expected, not a coincidence to
+worry about --- those experiments' event streams essentially never reached
+the trigger in the first place (\S20 SC4), so candidate C3's bug (which
+only mattered once triggered) never had a chance to affect their outcome.
+
 \section{Experiment 3: Cross-Layout}
 
 Layout A (\texttt{small\_layout\_mvp.json}, 10 containers, timeout 1.0s),
@@ -328,22 +410,36 @@ line per invocation. Key entries: \texttt{run\_cross\_layout.py}
 fix, git commit \texttt{2617a50}).
 
 \section{Limitations}
+\label{sec:limitations}
 
 \begin{itemize}
   \item \textbf{Experiment 5} (operator-acceptance study) is intentionally
     omitted, per spec \S23's own framing of it as optional -- noted here
     explicitly rather than silently dropped.
-  \item \textbf{This benchmark instance rarely triggers SAR-CRP's
-    repair path.} SC4 (mean impact 0.090 vs.\ $\theta_{\text{impact}}=0.30$)
-    is the root cause behind Experiments 1/3/4 all showing SAR-CRP tied to
-    Static: the synthetic event generator on this instance's parameters
-    essentially never produces an event severe enough to cross the
-    trigger. The comparisons against Full Reoptimization/Periodic/MPC are
-    still informative (they show SAR-CRP correctly avoids unnecessary
-    churn), but this suite does not yet demonstrate a scenario where
-    SAR-CRP's repair mechanism produces a strict, active win over Static.
-    A benchmark instance/event-parameter combination that reliably crosses
-    the trigger is left to future work.
+  \item \textbf{This benchmark instance rarely triggers SAR-CRP's repair
+    path, and \S\ref{sec:existence-proof}'s existence-proof experiment
+    shows precisely why a real win is still elusive even when forced.}
+    SC4 (mean impact 0.090 vs.\ $\theta_{\text{impact}}=0.30$) explains why
+    Experiments 1/3/4's random event streams essentially never cross the
+    trigger. But forcing the trigger directly (\S\ref{sec:existence-proof})
+    shows the gap is not purely a benchmark-calibration artifact: at small
+    scale, no repair's operational gain exceeds its own stability +
+    confidence cost; at 50-container scale, a real gain is found on every
+    seed but lands just under spec \S9's 1\%-of-$J_{old}$ fallback margin.
+    A benchmark/event-parameter combination (or a larger multi-urgent-container
+    stake) that clears this margin under spec's own unmodified default
+    parameters is left to future work -- this report does not retune
+    $\theta_{\text{impact}}$, $\tau$, or $\lambda$ to manufacture a win.
+  \item \textbf{\texttt{I\_blocking} (\S8.4/\S44.3, $w_b=0.25$, tied for the
+    largest impact weight) is structurally always 0 in this suite.} Every
+    call site passes the same physical state for both ``old'' and ``new''
+    because Paper 1's simulator never executes an action's physical effect
+    between events (\texttt{commit\_status} never becomes
+    \texttt{"committed"} anywhere in \texttt{src/}) -- giving this term real
+    signal needs a physical-execution model, which is explicitly Paper 2's
+    scope (``imperfect execution''), not Paper 1's. Ablation A6 (No
+    Blocking Impact) is consequently a no-op vs.\ default SAR-CRP in this
+    report, not evidence blocking pressure is unimportant.
   \item \textbf{CRP\_RL comparison caveat} as stated in \S\ref{sec:real-solver} above:
     rescoring under SAR-CRP's own objective, not CRP\_RL's native metric.
   \item \textbf{Base-paper citations} (Shin et al.\ 2026, Zhou \& Zhang
@@ -357,13 +453,27 @@ The full baseline suite (B1--B6), all six ablations (A1--A6), the
 statistical protocol (spec \S23.6), cross-layout generalization, ground
 truth/offline-proxy comparisons, and a real trained-model comparison are
 now all implemented and exercised with real, seeded runs rather than
-placeholders. Two genuine implementation bugs were caught and fixed
+placeholders. Five genuine implementation bugs were caught and fixed
 directly from this experiment suite's own output before being reported
-(the significance-test grid-cell aggregation bug, and the MPC tail-state
-bug) -- both are documented above rather than silently corrected. The
-main open finding is that this specific benchmark instance's default
-event parameters keep SAR-CRP's trigger from firing in practice; the
-suite is otherwise ready to be pointed at a higher-impact benchmark
-instance as the natural next step.
+(the significance-test grid-cell aggregation bug, the MPC tail-state bug,
+an \texttt{I\_blocking} spec-formula deviation, a local-search best-tracking
+regression, and candidate C3/N5's own tail-state bug) -- all are documented
+above rather than silently corrected, and Experiment 1/3/4's numbers were
+re-verified unchanged after each fix.
+
+The main finding, sharpened considerably by \S\ref{sec:existence-proof}'s
+existence-proof experiment, is no longer just ``this benchmark's default
+event parameters keep SAR-CRP's trigger from firing'' -- forcing the
+trigger directly shows the mechanism's full pipeline (impact estimation,
+trigger, candidate generation, local search, fallback margin) works
+exactly as spec \S9/\S18 describe, and at industrially-relevant scale
+(50 containers) finds a real, positive improving candidate on every
+seed tested. What stands between that candidate and an actual UPDATE is
+one specific, identified, and quantified gap: the discovered gain (mean
+0.489) sits just under spec's own 1\%-of-$J_{old}$ fallback margin
+(0.615). The natural next step is no longer a vague ``try a harder
+benchmark'' but the precise question this experiment leaves open: what
+combination of benchmark design and/or multi-container stakes, under
+spec's own unmodified default parameters, clears that specific margin.
 
 \end{document}
