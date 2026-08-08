@@ -14,7 +14,7 @@ def _is_forbidden(container: str, dest_stack: str, constraints: dict | None) -> 
     return False
 
 
-def _choose_relocation_dest(state: YardState, source_stack_id: str, container: str, constraints: dict | None) -> str | None:
+def choose_relocation_dest(state: YardState, source_stack_id: str, container: str, constraints: dict | None) -> str | None:
     """Relocate to the emptiest eligible stack (greedy leveling heuristic)."""
     candidates = [
         s for s in state.stacks
@@ -53,7 +53,7 @@ def solve_crp(
         stack = next(s for s in state.stacks if s.id == stack_id)
         while stack.containers[-1] != container:
             blocker = stack.containers[-1]
-            dest = _choose_relocation_dest(state, stack.id, blocker, constraints)
+            dest = choose_relocation_dest(state, stack.id, blocker, constraints)
             if dest is None:
                 break  # no legal destination; leave blocker in place (marks plan invalid downstream)
             dest_stack = next(s for s in state.stacks if s.id == dest)

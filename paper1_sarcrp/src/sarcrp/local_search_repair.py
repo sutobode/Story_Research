@@ -2,8 +2,10 @@ import copy
 import random
 import time
 
+from sarcrp.crp_solver import choose_relocation_dest, solve_crp
 from sarcrp.objective import compute_objective, data_confidence_cost, operational_cost, stability_cost
-from sarcrp.schemas import Plan
+from sarcrp.schemas import Action, Plan
+from sarcrp.state_ops import find_stack
 
 
 def _score(plan: Plan, p_old: Plan, frozen_count: int, urgent_containers: list[str], conf_new: float) -> float:
@@ -42,6 +44,36 @@ def _neighbor_swap_actions(plan: Plan, frozen_count: int, rng: random.Random) ->
     return new_plan
 
 
+def _neighbor_insert_urgent_support(
+    plan: Plan, state, frozen_count: int, urgent_containers: list[str], rng: random.Random
+) -> Plan | None:
+    """N3 (spec 15.1/46.2): insert a relocation that unblocks an urgent target,
+    placed at the earliest non-frozen slot so the target becomes reachable sooner."""
+    if not urgent_containers:
+        return None
+    container = rng.choice(urgent_containers)
+    stack_id = find_stack(state, container)
+    if stack_id is None:
+        return None
+    stack = next(s for s in state.stacks if s.id == stack_id)
+    if not stack.containers or stack.containers[-1] == container:
+        return None  # already on top -- nothing to unblock
+    blocker = stack.containers[-1]
+    dest = choose_relocation_dest(state, stack.id, blocker, None)
+    if dest is None:
+        return None
+    new_action = Action(
+        action_id=f"n3_{rng.randint(0, 999999)}", step_index=0, type="RELOCATE",
+        container=blocker, source_stack=stack.id, dest_stack=dest,
+        commit_status="planned", planned_time=0,
+    )
+    new_actions = list(plan.actions)
+    new_actions.insert(frozen_count, new_action)
+    for i, a in enumerate(new_actions):
+        a.step_index = i
+    return Plan(plan_id=plan.plan_id, created_at=plan.created_at, source=plan.source, actions=new_actions)
+
+
 def _neighbor_remove_obsolete(plan: Plan, frozen_count: int, rng: random.Random) -> Plan | None:
     """N4: drop one non-frozen action (models "remove no-longer-needed relocation")."""
     non_frozen = [i for i in range(len(plan.actions)) if i >= frozen_count]
@@ -54,7 +86,43 @@ def _neighbor_remove_obsolete(plan: Plan, frozen_count: int, rng: random.Random)
     return Plan(plan_id=plan.plan_id, created_at=plan.created_at, source=plan.source, actions=new_actions)
 
 
-NEIGHBORHOOD_OPS = [_neighbor_change_destination, _neighbor_swap_actions, _neighbor_remove_obsolete]
+def _neighbor_replace_tail_with_solver(
+    plan: Plan, state, retrieval_queue_new: list[str], frozen_count: int, rng: random.Random
+) -> Plan | None:
+    """N5 (spec 15.1/46.2): keep a k-length prefix (k >= frozen_count), replace
+    the rest with the CRP solver's suggestion for the current retrieval queue."""
+    if len(plan.actions) <= frozen_count:
+        return None
+    k = rng.randint(frozen_count, len(plan.actions))
+    prefix = plan.actions[:k]
+    tail_solution = solve_crp(state, retrieval_queue_new, time_limit_sec=1.0)
+    new_actions = list(prefix) + list(tail_solution.actions)
+    for i, a in enumerate(new_actions):
+        a.step_index = i
+    return Plan(plan_id=plan.plan_id, created_at=plan.created_at, source=plan.source, actions=new_actions)
+
+
+NEIGHBORHOOD_OP_NAMES = ("N1", "N2", "N3", "N4", "N5")
+
+
+def _sample_neighbor(
+    plan: Plan,
+    state,
+    frozen_count: int,
+    urgent_containers: list[str],
+    retrieval_queue_new: list[str],
+    rng: random.Random,
+) -> Plan | None:
+    op_name = rng.choice(NEIGHBORHOOD_OP_NAMES)
+    if op_name == "N1":
+        return _neighbor_change_destination(plan, state, frozen_count, rng)
+    if op_name == "N2":
+        return _neighbor_swap_actions(plan, frozen_count, rng)
+    if op_name == "N3":
+        return _neighbor_insert_urgent_support(plan, state, frozen_count, urgent_containers, rng)
+    if op_name == "N4":
+        return _neighbor_remove_obsolete(plan, frozen_count, rng)
+    return _neighbor_replace_tail_with_solver(plan, state, retrieval_queue_new, frozen_count, rng)
 
 
 def local_search_repair(
@@ -71,9 +139,7 @@ def local_search_repair(
     urgent_containers: list[str] | None = None,
     conf_new: float = 1.0,
 ) -> Plan:
-    """Stochastic hill climbing over N1/N2/N4 (spec 15.2/46.3). N3/N5 need the
-    CRP solver / urgent-insertion context and are deferred to a follow-up plan
-    once the MVP decision gate (spec 33) passes."""
+    """Stochastic hill climbing over N1-N5 (spec 15.2/46.3)."""
     urgent = urgent_containers or []
     start_time = time.monotonic()
     p_best = p_start
@@ -86,11 +152,7 @@ def local_search_repair(
 
         neighbors = []
         for _ in range(m_neighbors):
-            op = rng.choice(NEIGHBORHOOD_OPS)
-            if op is _neighbor_change_destination:
-                candidate = op(p_best, state, frozen_count, rng)
-            else:
-                candidate = op(p_best, frozen_count, rng)
+            candidate = _sample_neighbor(p_best, state, frozen_count, urgent, retrieval_queue_new, rng)
             if candidate is not None:
                 neighbors.append(candidate)
 
