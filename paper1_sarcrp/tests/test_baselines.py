@@ -69,6 +69,28 @@ def test_mpc_receding_horizon_freezes_prefix_and_resolves_tail():
     assert result.actions[0].container == plan.actions[0].container  # frozen prefix (1 action) untouched
 
 
+def test_mpc_receding_horizon_does_not_double_plan_the_frozen_prefixs_containers():
+    # Regression test for a real bug: the tail used to be solved against the
+    # ORIGINAL state as if the frozen prefix's own actions never happened,
+    # so the tail's fresh solve would re-plan moves for containers the
+    # frozen prefix already retrieved/relocated -- is_plan_valid on the
+    # concatenated result then correctly rejects it (e.g. a RETRIEVE for a
+    # container no longer on top because the frozen prefix already popped
+    # it). Use a 3-container stack so horizon=2 forces the frozen prefix to
+    # actually retrieve something the tail must not touch again.
+    from sarcrp.plan_validator import is_plan_valid
+    state = YardState(
+        instance_id="t", time_step=0, layout=Layout(num_stacks=2, max_tier=5),
+        stacks=[Stack(id="S1", containers=["C3", "C2", "C1"], max_tier=5), Stack(id="S2", containers=[], max_tier=5)],
+        container_attributes={}, retrieval_queue=["C1", "C2", "C3"], pickup_prob={}, data_timestamp=0, state_confidence=1.0,
+    )
+    plan = full_reoptimization(state, retrieval_queue_new=["C1", "C2", "C3"], time_limit_sec=1.0)
+    result = mpc_receding_horizon(state, plan, retrieval_queue_new=["C1", "C2", "C3"], horizon=2)
+    assert is_plan_valid(result, state)
+    retrieved = [a.container for a in result.actions if a.type == "RETRIEVE"]
+    assert sorted(retrieved) == ["C1", "C2", "C3"]  # every container retrieved exactly once
+
+
 def test_full_reoptimization_accepts_a_custom_solver():
     state = make_state(["C1", "C2"])
     calls = {"count": 0}
