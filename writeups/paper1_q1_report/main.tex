@@ -178,8 +178,8 @@ stream: a container is buried under blockers and placed last in the
 initial retrieval priority, then a single forced urgent-insertion event
 promotes it to top priority.
 
-\textbf{Three real implementation bugs were caught and fixed while
-building this scenario} (each with its own regression test, all
+\textbf{Six real implementation bugs were caught and fixed while building
+this scenario and its follow-ups} (each with its own regression test, all
 independent of and prior to any result reported here): (1) \texttt{I\_blocking}
 deviated from spec \S44.3's union(old,new) top-k formula (\S\ref{sec:limitations} below
 explains why it is nonetheless still always 0 in this suite); (2)
@@ -191,12 +191,20 @@ tail) never renumbered \texttt{step\_index} after concatenation, so it
 collided with the frozen prefix's own indices and was fabricated as
 ``frozen-violated'' ($p_f=\infty$) on every single call with $H_f>0$ ---
 i.e.\ every experiment in this report, since spec \S48's own default is
-$H_f=3$. Separately, even after renumbering, C3's tail was solved against
-the \emph{original} state and the \emph{full} queue rather than the state
+$H_f=3$; (4) even after renumbering, C3's tail was solved against the
+\emph{original} state and the \emph{full} queue rather than the state
 resulting from the frozen prefix, duplicating work already covered (the
 same defect independently existed in \texttt{baselines.mpc\_receding\_horizon}
 and local search's N5 operator; all three now share one fix,
-\texttt{freeze\_horizon.apply\_frozen\_prefix}).
+\texttt{freeze\_horizon.apply\_frozen\_prefix}); (5) while testing whether
+local search could coordinate a fix across \emph{multiple} simultaneous
+urgent containers (below), \texttt{sarcrp\_core.\_score\_candidate} and
+\texttt{local\_search\_repair.\_score} were found to hardcode
+\texttt{is\_valid=True} unconditionally -- spec \S11.3's $M_{\mathrm{inf}}$
+invalidity penalty had never actually been checked during candidate
+selection, meaning an illegally-replaying candidate could look
+artificially cheap and win outright instead of being excluded. Both now
+call \texttt{is\_plan\_valid} for real.
 
 \textbf{Scenario A (7 containers).} Impact reaches 0.325 ($\ge\theta_{\text{impact}}$),
 so the trigger correctly fires. But no candidate (C1, C2, or the now-fixed
@@ -245,6 +253,56 @@ report to the last reported digit. This is expected, not a coincidence to
 worry about --- those experiments' event streams essentially never reached
 the trigger in the first place (\S20 SC4), so candidate C3's bug (which
 only mattered once triggered) never had a chance to affect their outcome.
+
+\textbf{Attempted escalation: multiple simultaneous urgent containers.} If
+one urgent container's achievable gain (0.514) falls just short of $\tau$
+(0.615), could two or more containers promoted together clear it, since a
+single coordinated repair's stability ``entry cost'' would then be spread
+across more benefit? A new local-search operator, N6 (beyond spec \S15.1's
+original N1--N5), was built specifically to construct this minimal
+coordinated fix directly rather than hope N1--N5's random sampling stumbles
+onto it (N3 only unblocks one random urgent container per sample and never
+reorders its own retrieval; N5/C3 replace the entire tail, paying stability
+cost unrelated to the fix). N6 works and is unit-tested for one urgent
+container, but is fully deterministic (no randomness in its destination
+choices), and on the 50-container scenario with two or more simultaneous
+urgent containers its one hypothesis triggers an unrelated side effect
+(relocating a blocker onto a stack that a different, untouched kept-tail
+action assumed was undisturbed) -- now correctly rejected by fix (5) above
+rather than silently winning, but not a discovered win either. Fully
+guaranteeing validity for an arbitrary coordinated splice would require
+simulating the entire kept tail forward, effectively a second planner; this
+is left as an identified but unresolved gap rather than force-fit. The
+single-urgent-container case (gain 0.514 vs.\ $\tau=0.615$) remains the
+closest approach to a genuine UPDATE found via candidate generation alone.
+
+\textbf{Scenario C: does the single-step margin cost something over a full
+episode?} Scenario B's decision is myopic by construction: $\tau$ compares
+only the immediate $J(P_{old})$ against $J(P_{best})$ at one event, with no
+visibility into what happens afterward. To test whether this myopia is
+actually costly, both of the following were run over the \emph{same}
+subsequent 10-step random event stream (seeded, \texttt{uncertainty\_level="medium"},
+confidence 0.5) following Scenario B's forced event: (i) SAR-CRP's real
+decision (KEEP, $\tau_{\text{frac}}=0.01$) at the forced event, then normal
+$\tau_{\text{frac}}=0.01$ decisions for every subsequent event; (ii) an
+identical run except the forced event's own $\tau_{\text{frac}}$ is set to
+0 -- i.e.\ SAR-CRP adopts the exact same candidate it already computed as
+best, forced through only by removing the margin for that one decision, not
+by touching candidate generation, the trigger, $\theta_{\text{impact}}$, or
+any later decision. Cumulative total cost over the whole window was
+compared across all 20 \texttt{REPORT\_SEEDS}.
+
+\textbf{Result: the early-fix path is strictly cheaper on 19 of 20 seeds
+(never worse on the 20th), mean saving 2.87 in cumulative $J$.} This is
+real, robust, seed-independent evidence that spec \S9's single-step
+fallback margin is myopic: it cannot see the compounding benefit that a
+full-episode view reveals. This does not mean SAR-CRP's \emph{current}
+decision rule produces a win (it still correctly applies its own,
+documented margin) -- it identifies precisely \emph{why} that margin, as
+currently specified, leaves value on the table, and quantifies it. A
+multi-step-aware (or discounted-lookahead) refinement of the fallback
+criterion is the concrete, evidenced next step this experiment points to,
+rather than a vague ``try harder benchmarks.''
 
 \section{Experiment 3: Cross-Layout}
 
@@ -399,6 +457,22 @@ CRP\_RL's relocation choices do not beat the greedy heuristic \emph{under
 this objective}, not a general claim that CRP\_RL is a worse CRP solver
 in an absolute sense.
 
+\textbf{Independent adapter validation (rules out an adapter bug as the
+explanation).} Before trusting the $-48\%$ figure, the adapter's own
+bookkeeping was validated independently of this project's objective
+entirely: a random 50-container instance was built with CRP\_RL's
+\emph{own} generator (its native tensor format, not ours), the pretrained
+model was run natively (unpatched) to obtain CRP\_RL's own reported cost
+(non-degenerate, finite, and positive), and the same input was then run
+through this project's recording-wrapped decode. The number of relocations
+recorded matched exactly the number of \texttt{RELOCATE} actions produced
+by replaying those moves through \texttt{moves\_to\_plan}
+(\texttt{relocation\_count(plan) == len(moves)}), and every container was
+retrieved exactly once. The adapter faithfully captures and replays every
+decision the model actually makes; the $-48\%$ result reflects the model's
+own relocation choices scored under a different objective than it was
+trained for, not a translation defect.
+
 \section{Reproducibility}
 
 Every run cited above is recorded in
@@ -417,19 +491,29 @@ fix, git commit \texttt{2617a50}).
     omitted, per spec \S23's own framing of it as optional -- noted here
     explicitly rather than silently dropped.
   \item \textbf{This benchmark instance rarely triggers SAR-CRP's repair
-    path, and \S\ref{sec:existence-proof}'s existence-proof experiment
-    shows precisely why a real win is still elusive even when forced.}
-    SC4 (mean impact 0.090 vs.\ $\theta_{\text{impact}}=0.30$) explains why
-    Experiments 1/3/4's random event streams essentially never cross the
-    trigger. But forcing the trigger directly (\S\ref{sec:existence-proof})
-    shows the gap is not purely a benchmark-calibration artifact: at small
-    scale, no repair's operational gain exceeds its own stability +
-    confidence cost; at 50-container scale, a real gain is found on every
-    seed but lands just under spec \S9's 1\%-of-$J_{old}$ fallback margin.
-    A benchmark/event-parameter combination (or a larger multi-urgent-container
-    stake) that clears this margin under spec's own unmodified default
-    parameters is left to future work -- this report does not retune
-    $\theta_{\text{impact}}$, $\tau$, or $\lambda$ to manufacture a win.
+    path, and \S\ref{sec:existence-proof}'s existence-proof experiments
+    show precisely why a real UPDATE is still elusive even when forced,
+    and precisely what it would take.} SC4 (mean impact 0.090 vs.\
+    $\theta_{\text{impact}}=0.30$) explains why Experiments 1/3/4's random
+    event streams essentially never cross the trigger. Forcing the trigger
+    directly shows the gap is not purely a benchmark-calibration artifact:
+    at small scale, no repair's operational gain exceeds its own stability
+    + confidence cost; at 50-container scale, a real gain is found on
+    every seed but lands just under spec \S9's 1\%-of-$J_{old}$ fallback
+    margin (Scenario B). An attempt to clear that margin by coordinating a
+    fix across multiple simultaneous urgent containers (a new operator,
+    N6) did not succeed at 2+ containers, for an identified and documented
+    reason (an unrelated kept-tail action's assumption gets disturbed;
+    guaranteeing this in general needs a full forward simulation of the
+    kept tail, effectively a second planner). But a multi-step experiment
+    (Scenario C) shows the margin itself, not the mechanism, is the
+    binding constraint: adopting Scenario B's already-computed best
+    candidate (bypassing only $\tau$ for that one decision) is strictly
+    cheaper over the rest of the episode on 19/20 seeds (mean saving
+    2.87). This report does not retune $\theta_{\text{impact}}$, $\tau$,
+    $\lambda$, or the benchmark to manufacture a win; the evidenced next
+    step is a multi-step-aware refinement of the fallback margin itself,
+    not a search for a more favorable benchmark.
   \item \textbf{\texttt{I\_blocking} (\S8.4/\S44.3, $w_b=0.25$, tied for the
     largest impact weight) is structurally always 0 in this suite.} Every
     call site passes the same physical state for both ``old'' and ``new''
@@ -451,29 +535,41 @@ fix, git commit \texttt{2617a50}).
 
 The full baseline suite (B1--B6), all six ablations (A1--A6), the
 statistical protocol (spec \S23.6), cross-layout generalization, ground
-truth/offline-proxy comparisons, and a real trained-model comparison are
-now all implemented and exercised with real, seeded runs rather than
-placeholders. Five genuine implementation bugs were caught and fixed
-directly from this experiment suite's own output before being reported
-(the significance-test grid-cell aggregation bug, the MPC tail-state bug,
-an \texttt{I\_blocking} spec-formula deviation, a local-search best-tracking
-regression, and candidate C3/N5's own tail-state bug) -- all are documented
-above rather than silently corrected, and Experiment 1/3/4's numbers were
-re-verified unchanged after each fix.
+truth/offline-proxy comparisons, and a real trained-model comparison
+(independently validated, \S\ref{sec:real-solver}) are now all implemented
+and exercised with real, seeded runs rather than placeholders. Six genuine
+implementation bugs were caught and fixed directly from this experiment
+suite's own output before being reported (the significance-test grid-cell
+aggregation bug, the MPC tail-state bug, an \texttt{I\_blocking}
+spec-formula deviation, a local-search best-tracking regression, candidate
+C3/N5's own tail-state bug, and candidate scoring never actually checking
+plan validity) -- all are documented above rather than silently corrected,
+and Experiment 1/3/4's numbers were re-verified unchanged after each fix.
 
 The main finding, sharpened considerably by \S\ref{sec:existence-proof}'s
-existence-proof experiment, is no longer just ``this benchmark's default
-event parameters keep SAR-CRP's trigger from firing'' -- forcing the
-trigger directly shows the mechanism's full pipeline (impact estimation,
-trigger, candidate generation, local search, fallback margin) works
-exactly as spec \S9/\S18 describe, and at industrially-relevant scale
-(50 containers) finds a real, positive improving candidate on every
-seed tested. What stands between that candidate and an actual UPDATE is
-one specific, identified, and quantified gap: the discovered gain (mean
-0.489) sits just under spec's own 1\%-of-$J_{old}$ fallback margin
-(0.615). The natural next step is no longer a vague ``try a harder
-benchmark'' but the precise question this experiment leaves open: what
-combination of benchmark design and/or multi-container stakes, under
-spec's own unmodified default parameters, clears that specific margin.
+three existence-proof experiments, is no longer just ``this benchmark's
+default event parameters keep SAR-CRP's trigger from firing'' -- forcing
+the trigger directly shows the mechanism's full pipeline (impact
+estimation, trigger, candidate generation, local search, fallback margin)
+works exactly as spec \S9/\S18 describe, and at industrially-relevant
+scale (50 containers) finds a real, positive improving candidate on every
+seed tested (Scenario B). An attempt to clear the remaining gap by
+coordinating multiple simultaneous urgent containers (N6) did not succeed,
+for a specific, identified reason rather than an unexplained one (Scenario
+B follow-up). Most importantly, a multi-step experiment (Scenario C)
+shows the single-step fallback margin itself -- not the trigger, not
+candidate generation, not local search -- is the binding, myopic
+constraint: forcing through the exact candidate SAR-CRP already computes
+as best is strictly cheaper over a full episode on 19/20 seeds (mean
+saving 2.87), evidence obtained without retuning any default parameter.
+
+This reframes Paper 1's central remaining question precisely: not ``does
+the mechanism work'' (it does, end-to-end, as specified) and not ``can a
+harder benchmark be found'' (a targeted search along that axis, both at
+small and industrial scale, did not by itself resolve it), but ``how
+should the fallback margin account for compounding future cost instead of
+comparing only the immediate decision.'' That is a concrete, evidenced,
+scoped design question for SAR-CRP's own decision rule -- a substantially
+stronger position than an unexplained tie with the do-nothing baseline.
 
 \end{document}
