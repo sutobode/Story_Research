@@ -3,6 +3,7 @@ import random
 import time
 
 from sarcrp.crp_solver import choose_relocation_dest, solve_crp
+from sarcrp.freeze_horizon import apply_frozen_prefix
 from sarcrp.objective import compute_objective, data_confidence_cost, operational_cost, stability_cost
 from sarcrp.schemas import Action, Plan
 from sarcrp.state_ops import find_stack
@@ -93,12 +94,21 @@ def _neighbor_replace_tail_with_solver(
     plan: Plan, state, retrieval_queue_new: list[str], frozen_count: int, rng: random.Random
 ) -> Plan | None:
     """N5 (spec 15.1/46.2): keep a k-length prefix (k >= frozen_count), replace
-    the rest with the CRP solver's suggestion for the current retrieval queue."""
+    the rest with the CRP solver's suggestion for the current retrieval queue.
+
+    The tail must be solved against the state that results *after* the
+    kept prefix's own actions, not the original state -- solving fresh
+    against the untouched state and full queue (the same bug class found
+    in baselines.mpc_receding_horizon and sarcrp_core.replan's candidate
+    C3) makes the tail duplicate retrievals/relocations the prefix
+    already covers."""
     if len(plan.actions) <= frozen_count:
         return None
     k = rng.randint(frozen_count, len(plan.actions))
     prefix = [copy.deepcopy(a) for a in plan.actions[:k]]
-    tail_solution = solve_crp(state, retrieval_queue_new, time_limit_sec=1.0)
+    kept_prefix_plan = Plan(plan_id="n5_prefix", created_at=0, source="n5", actions=plan.actions[:k])
+    shadow_state, remaining_queue = apply_frozen_prefix(state, kept_prefix_plan, retrieval_queue_new)
+    tail_solution = solve_crp(shadow_state, remaining_queue, time_limit_sec=1.0)
     new_actions = prefix + list(tail_solution.actions)
     for i, a in enumerate(new_actions):
         a.step_index = i
@@ -142,11 +152,24 @@ def local_search_repair(
     urgent_containers: list[str] | None = None,
     conf_new: float = 1.0,
 ) -> Plan:
-    """Stochastic hill climbing over N1-N5 (spec 15.2/46.3)."""
+    """Stochastic hill climbing over N1-N5 (spec 15.2/46.3).
+
+    `current`/`score_current` is the exploratory walk state -- the
+    epsilon-greedy acceptance criterion deliberately lets it get WORSE
+    sometimes, to escape local optima. `best`/`score_best` tracks the
+    best plan seen at any point during the walk and is what gets
+    returned: conflating the two (returning wherever the walk happened to
+    end up) let a walk that wandered off via an epsilon-accept and never
+    found its way back by t_iters return something strictly worse than
+    p_start itself -- a real bug caught building Paper 1's
+    existence-proof scenario (every prior unit test in this file always
+    passed epsilon=0.0, which never exercises the accept-worse branch at
+    all, so this never surfaced before)."""
     urgent = urgent_containers or []
     start_time = time.monotonic()
-    p_best = p_start
-    score_best = _score(p_best, p_old, frozen_count, urgent, conf_new)
+    current = p_start
+    score_current = _score(current, p_old, frozen_count, urgent, conf_new)
+    best, score_best = current, score_current
     stale_iterations = 0
 
     for _ in range(t_iters):
@@ -155,7 +178,7 @@ def local_search_repair(
 
         neighbors = []
         for _ in range(m_neighbors):
-            candidate = _sample_neighbor(p_best, state, frozen_count, urgent, retrieval_queue_new, rng)
+            candidate = _sample_neighbor(current, state, frozen_count, urgent, retrieval_queue_new, rng)
             if candidate is not None:
                 neighbors.append(candidate)
 
@@ -169,9 +192,12 @@ def local_search_repair(
         scored = [(_score(n, p_old, frozen_count, urgent, conf_new), n) for n in neighbors]
         candidate_score, candidate_plan = min(scored, key=lambda pair: pair[0])
 
-        if candidate_score < score_best:
-            p_best, score_best = candidate_plan, candidate_score
+        if candidate_score < score_current:
+            current, score_current = candidate_plan, candidate_score
         elif rng.random() < epsilon:
-            p_best, score_best = candidate_plan, candidate_score
+            current, score_current = candidate_plan, candidate_score
 
-    return p_best
+        if score_current < score_best:
+            best, score_best = current, score_current
+
+    return best

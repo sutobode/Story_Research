@@ -107,11 +107,92 @@ def test_n5_replaces_tail_with_solver_suggestion():
     assert len(result.actions) >= 1
 
 
+def test_n5_does_not_duplicate_retrievals_already_covered_by_the_kept_prefix():
+    # Regression test for the same bug class found in
+    # baselines.mpc_receding_horizon and sarcrp_core.replan's candidate
+    # C3: solving the tail against the ORIGINAL, untouched state and full
+    # queue makes the tail duplicate whatever the kept prefix already
+    # retrieved.
+    state = make_state_with_buried_urgent()  # S1=[C2,C1], C1 on top
+    plan = Plan(plan_id="p", created_at=0, source="t", actions=[
+        Action(action_id="a0", step_index=0, type="RETRIEVE", container="C1",
+               source_stack="S1", dest_stack=None, commit_status="planned", planned_time=0),
+    ])
+
+    class _FixedK:
+        """rng stand-in that forces k = len(plan.actions) (keep the one
+        action, re-solve everything else) while delegating other calls."""
+        def __init__(self, seed):
+            self._r = random.Random(seed)
+
+        def randint(self, a, b):
+            return b
+
+        def __getattr__(self, name):
+            return getattr(self._r, name)
+
+    result = _neighbor_replace_tail_with_solver(
+        plan, state, retrieval_queue_new=["C1", "C2"], frozen_count=0, rng=_FixedK(0),
+    )
+    retrieved = [a.container for a in result.actions if a.type == "RETRIEVE"]
+    assert retrieved.count("C1") == 1  # not retrieved again by the tail
+    assert retrieved.count("C2") == 1
+
+
 def test_n5_returns_none_when_plan_is_fully_frozen():
     state = make_state()
     plan = make_plan(dest="S2")
     result = _neighbor_replace_tail_with_solver(plan, state, retrieval_queue_new=["C1"], frozen_count=1, rng=random.Random(0))
     assert result is None
+
+
+class _AlwaysAcceptRNG:
+    """Wraps a real Random for .choice/.sample/.randint, but forces
+    .random() to always return 0.0 -- guaranteeing the epsilon-greedy
+    'accept a worse neighbor' branch fires on every iteration that has one."""
+    def __init__(self, seed):
+        self._r = random.Random(seed)
+
+    def random(self):
+        return 0.0
+
+    def __getattr__(self, name):
+        return getattr(self._r, name)
+
+
+def test_local_search_repair_never_returns_worse_than_its_own_starting_score():
+    # Regression test for a real bug: p_best/score_best served double duty
+    # as both the wandering "current" state (which the epsilon-greedy
+    # acceptance criterion deliberately lets get worse, to escape local
+    # optima) AND the value ultimately returned. A metaheuristic must track
+    # the best-EVER-seen plan separately from the exploratory "current"
+    # state, or a walk that wanders off and never finds its way back by
+    # t_iters returns something strictly worse than where it started --
+    # observed for real building the existence-proof scenario (Task: make
+    # SAR-CRP actually activate), where local search returned a plan
+    # scoring 5.8 against a start of 0.375.
+    state = make_state_with_buried_urgent()
+    p_old = Plan(plan_id="p", created_at=0, source="t", actions=[
+        Action(action_id="a0", step_index=0, type="RETRIEVE", container="C1",
+               source_stack="S1", dest_stack=None, commit_status="planned", planned_time=0),
+    ])
+    rng = _AlwaysAcceptRNG(0)
+    result = local_search_repair(
+        p_old, p_old, state, retrieval_queue_new=["C1", "C2"], frozen_count=0, rng=rng,
+        t_iters=30, m_neighbors=10, epsilon=0.05, urgent_containers=["C2"],
+    )
+    from sarcrp.objective import compute_objective, data_confidence_cost, operational_cost, stability_cost
+    op = operational_cost(result, ["C2"], is_valid=True)
+    stab, violated = stability_cost(result, p_old, frozen_count=0)
+    data = data_confidence_cost(result, p_old, conf_new=1.0)
+    result_score = float("inf") if violated else compute_objective(op, stab, data)
+
+    start_op = operational_cost(p_old, ["C2"], is_valid=True)
+    start_stab, start_violated = stability_cost(p_old, p_old, frozen_count=0)
+    start_data = data_confidence_cost(p_old, p_old, conf_new=1.0)
+    start_score = compute_objective(start_op, start_stab, start_data)
+
+    assert result_score <= start_score
 
 
 def test_local_search_repair_can_reduce_urgent_retrieval_delay():

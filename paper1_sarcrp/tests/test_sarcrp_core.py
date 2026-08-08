@@ -1,6 +1,6 @@
 import random
 from sarcrp.schemas import Layout, Stack, YardState, Action, Plan
-from sarcrp.sarcrp_core import replan
+from sarcrp.sarcrp_core import replan, _build_c3
 
 
 def make_state(queue):
@@ -78,6 +78,39 @@ def test_impact_weights_override_changes_impact_total():
                                      ["C3"], theta_impact=0.0, tau_frac=1.0, rng=random.Random(0),
                                      impact_weights={"w_o": 0.25, "w_t": 0.20, "w_b": 0.0, "w_p": 0.20, "w_c": 0.10})
     assert zero_blocking_decision.impact.total <= default_decision.impact.total
+
+
+def test_build_c3_renumbers_step_index_sequentially_avoiding_collision():
+    # Regression test for a real bug: frozen.actions keeps plan_old's own
+    # step_index (0..h_f-1, since freeze_horizon.split_plan doesn't
+    # renumber), and tail_solution always restarts its OWN numbering at 0
+    # (every solver does this) -- concatenating them without renumbering
+    # collides both at index 0..h_f-1, so stability_cost's index-keyed
+    # lookup silently drops the frozen action and compares against
+    # whatever the tail put there instead, fabricating a "frozen prefix
+    # violated" (p_f=inf) result. This made candidate C3 score inf on
+    # every replan() call with h_f>0 -- i.e. every experiment this suite
+    # has run under spec 48's own default h_f=3 -- caught only by
+    # building a scenario (Task: existence-proof) where C3 was the one
+    # candidate that should have won.
+    plan_old = Plan(plan_id="p_old", created_at=0, source="t", actions=[
+        Action(action_id="a0", step_index=0, type="RETRIEVE", container="C1",
+               source_stack="S1", dest_stack=None, commit_status="planned", planned_time=0),
+        Action(action_id="a1", step_index=1, type="RETRIEVE", container="C2",
+               source_stack="S1", dest_stack=None, commit_status="planned", planned_time=1),
+    ])
+    frozen = Plan(plan_id="p_old_frozen", created_at=0, source="t", actions=plan_old.actions[:1])
+    tail_solution = Plan(plan_id="tail", created_at=0, source="solver", actions=[
+        Action(action_id="t0", step_index=0, type="RETRIEVE", container="X",
+               source_stack="S2", dest_stack=None, commit_status="planned", planned_time=0),
+        Action(action_id="t1", step_index=1, type="RETRIEVE", container="Y",
+               source_stack="S2", dest_stack=None, commit_status="planned", planned_time=1),
+    ])
+    c3 = _build_c3(plan_old, frozen, tail_solution)
+    indices = [a.step_index for a in c3.actions]
+    assert indices == [0, 1, 2]  # sequential, no collision
+    assert c3.actions[0].container == "C1"  # frozen action preserved at index 0
+    assert c3.actions[1].container == "X"  # tail's own first action now at index 1, not colliding with frozen's 0
 
 
 def test_replan_accepts_a_custom_solver():

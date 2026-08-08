@@ -1,8 +1,9 @@
+import copy
 import random
 from dataclasses import dataclass
 
 from sarcrp.crp_solver import solve_crp
-from sarcrp.freeze_horizon import split_plan
+from sarcrp.freeze_horizon import apply_frozen_prefix, split_plan
 from sarcrp.impact_estimator import ImpactBreakdown, compute_impact
 from sarcrp.local_search_repair import local_search_repair
 from sarcrp.minimal_repair import minimal_feasibility_repair
@@ -17,6 +18,23 @@ class ReplanDecision:
     impact: ImpactBreakdown
     j_old: float
     j_new: float
+
+
+def _build_c3(plan_old: Plan, frozen: Plan, tail_solution: Plan) -> Plan:
+    """Candidate C3 (spec 18 step 5): frozen prefix + a fresh solve on the
+    tail. Actions are deep-copied and renumbered sequentially --
+    frozen.actions keeps plan_old's own step_index (freeze_horizon.split_plan
+    doesn't renumber), and tail_solution always restarts its own numbering
+    at 0 (every solver does this), so concatenating them directly collides
+    both at indices 0..h_f-1. stability_cost's index-keyed lookup would
+    then silently drop the frozen action and compare against whatever the
+    tail put at that index instead, fabricating a "frozen prefix violated"
+    (p_f=inf) result on every call with h_f>0."""
+    actions = copy.deepcopy(list(frozen.actions)) + list(tail_solution.actions)
+    for i, a in enumerate(actions):
+        a.step_index = i
+    return Plan(plan_id=f"{plan_old.plan_id}_c3", created_at=plan_old.created_at,
+                source="frozen+crp_tail", actions=actions)
 
 
 def _score_candidate(plan: Plan, plan_old: Plan, frozen_count: int, urgent_containers: list[str], conf_new: float):
@@ -76,9 +94,9 @@ def replan(
             urgent_containers=urgent_containers, conf_new=conf_new, time_limit_sec=time_limit_sec,
         )
         candidates.append(c2)
-    tail_solution = active_solver(state_t, new_queue, time_limit_sec=time_limit_sec)
-    c3 = Plan(plan_id=f"{plan_old.plan_id}_c3", created_at=plan_old.created_at, source="frozen+crp_tail",
-              actions=list(frozen.actions) + list(tail_solution.actions))
+    shadow_state, remaining_queue = apply_frozen_prefix(state_t, frozen, new_queue)
+    tail_solution = active_solver(shadow_state, remaining_queue, time_limit_sec=time_limit_sec)
+    c3 = _build_c3(plan_old, frozen, tail_solution)
     candidates.append(c3)
 
     # Step 6: score every candidate.
