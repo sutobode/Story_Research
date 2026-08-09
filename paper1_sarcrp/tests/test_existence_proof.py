@@ -3,8 +3,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent / "experiments"))
 from run_existence_proof import (  # noqa: E402
-    TARGET, build_scale_scenario, build_scenario, force_urgent_insertion, run_once, run_once_scale,
-    run_lookahead_validation,
+    TARGET, build_scale_scenario, build_scale_scenario_b, build_scenario, force_urgent_insertion, run_once,
+    run_once_scale, run_lookahead_validation, run_scenario_e,
 )
 
 
@@ -92,3 +92,50 @@ def test_lookahead_margin_never_worse_and_captures_a_real_opportunity_on_seed_21
     result = run_lookahead_validation(seed=21, extra_steps=200)
     assert result["lookahead_better"] is True
     assert result["diff"] > 40.0  # real, substantial -- not noise
+
+
+def test_scenario_b_instance_gain_stays_reliably_under_its_own_margin_alone():
+    # Sanity check for the chained design below: instance B's own gain
+    # must NOT already exceed its own tau by itself, or plain "sarcrp"
+    # (no lookahead) would already succeed there and the comparison would
+    # not isolate the lookahead margin's own contribution.
+    import random
+    from sarcrp.crp_solver import solve_crp
+    from sarcrp.sarcrp_core import replan
+
+    state, old_queue, target = build_scale_scenario_b()
+    plan_old = solve_crp(state, old_queue, time_limit_sec=5.0)
+    new_queue = force_urgent_insertion(old_queue, target)
+    decision = replan(state, plan_old, old_queue, new_queue, [target], rng=random.Random(20), conf_new=0.5, time_limit_sec=5.0)
+    gain = decision.j_old - decision.j_new
+    tau = 0.01 * decision.j_old
+    assert gain > 0.0  # a real, if sub-margin, opportunity exists standalone
+    assert gain < tau  # ...but plain "sarcrp" alone must still KEEP
+
+
+def test_scenario_e_lookahead_updates_at_event_b_where_myopic_keeps():
+    result = run_scenario_e(seed=20)
+    assert result["myopic_decision_b"] == "KEEP"
+    assert result["lookahead_decision_b"] == "UPDATE"
+    assert result["lookahead_better"] is True
+    assert result["diff"] > 0.0
+
+
+def test_scenario_e_statistically_powered_across_report_seeds():
+    # The whole point of Scenario E: not a single seed's anecdote, but a
+    # real paired comparison with a test statistic behind it.
+    from sarcrp.seed_policy import REPORT_SEEDS
+    from sarcrp.stats import cliffs_delta, wilcoxon_signed_rank
+
+    results = [run_scenario_e(seed) for seed in REPORT_SEEDS]
+    updates_myopic = sum(r["myopic_decision_b"] == "UPDATE" for r in results)
+    updates_lookahead = sum(r["lookahead_decision_b"] == "UPDATE" for r in results)
+    assert updates_myopic == 0  # plain sarcrp never updates at event B on any seed
+    assert updates_lookahead >= len(REPORT_SEEDS) - 4  # lookahead updates on nearly every seed
+
+    myopic_totals = [r["myopic_total"] for r in results]
+    lookahead_totals = [r["lookahead_total"] for r in results]
+    wr = wilcoxon_signed_rank(lookahead_totals, myopic_totals)
+    delta = cliffs_delta(lookahead_totals, myopic_totals)
+    assert wr.p_value < 0.05
+    assert delta < 0  # lookahead's totals are stochastically lower (better)

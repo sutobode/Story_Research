@@ -54,6 +54,7 @@ from sarcrp.run_logging import log_run  # noqa: E402
 from sarcrp.sarcrp_core import replan  # noqa: E402
 from sarcrp.schemas import Layout, Stack, YardState  # noqa: E402
 from sarcrp.seed_policy import REPORT_SEEDS  # noqa: E402
+from sarcrp.stats import cliffs_delta, wilcoxon_signed_rank  # noqa: E402
 
 TARGET = "C07"
 FORCED_EVENT_CONFIDENCE = 0.75  # plausible mid/high-uncertainty confidence for the forced event (not a flat 1.0)
@@ -90,6 +91,31 @@ def build_scale_scenario() -> tuple[YardState, list[str], str]:
     instance tuning. TARGET is whatever container the generator already
     placed last in the retrieval order (deterministic, not hand-picked)."""
     instance = json.loads((Path(__file__).parent / "instances" / "crp_rl_scale_instance.json").read_text())
+    stacks = [Stack(id=s["id"], containers=list(s["containers"]), max_tier=s["max_tier"]) for s in instance["stacks"]]
+    old_queue = list(instance["initial_retrieval_order"])
+    state = YardState(
+        instance_id=instance["instance_id"], time_step=0, layout=Layout(**instance["layout"]), stacks=stacks,
+        container_attributes={}, retrieval_queue=old_queue, pickup_prob={}, data_timestamp=0, state_confidence=1.0,
+    )
+    return state, old_queue, old_queue[-1]
+
+
+def build_scale_scenario_b() -> tuple[YardState, list[str], str]:
+    """Second, independently-built scale instance (Scenario E): same
+    deterministic bottom-first round-robin recipe as build_scale_scenario,
+    different dimensions (11 stacks x 4 = 44, vs. instance A's 10x5=50).
+    Needed because only ONE specific queue-position/instance combination
+    was found to produce a real repair gain -- promoting any other
+    position on instance A gave exactly zero gain, even starting from a
+    pristine plan, so a second forced event on instance A cannot give the
+    lookahead margin a genuine second opportunity to combine with. This
+    second instance's own dimensions were chosen (see
+    generate_crp_rl_scale_instance_b.py) by sweeping several
+    (num_stacks, containers_per_stack) pairs and keeping the one whose
+    own gain (0.2119) stays reliably under its own tau (0.4649) by
+    itself, matching instance A's sub-margin pattern -- so plain
+    "sarcrp" must KEEP on instance B too, standing alone."""
+    instance = json.loads((Path(__file__).parent / "instances" / "crp_rl_scale_instance_b.json").read_text())
     stacks = [Stack(id=s["id"], containers=list(s["containers"]), max_tier=s["max_tier"]) for s in instance["stacks"]]
     old_queue = list(instance["initial_retrieval_order"])
     state = YardState(
@@ -273,6 +299,61 @@ def run_lookahead_validation(seed: int, extra_steps: int = 10) -> dict:
     }
 
 
+def run_scenario_e(seed: int) -> dict:
+    """Scenario E: a statistically-powered comparison, not a single
+    anecdote. Chains two INDEPENDENT forced single-event opportunities
+    (instance A: build_scale_scenario; instance B:
+    build_scale_scenario_b) into one synthetic two-decision episode, and
+    compares plain "sarcrp" (each decision independent, carried_gain
+    never threaded) against "sarcrp_lookahead" (carried_gain threaded
+    from event A's outcome into event B's decision) -- both using the
+    SAME default tau_frac=0.01 throughout, no manual override anywhere.
+    Each instance's own gain individually stays under its own tau
+    (verified separately for both instances), so plain "sarcrp" must
+    KEEP at both events on every seed; the question this answers is
+    whether carrying A's foregone gain into B's decision is enough to
+    cross B's own margin, across many seeds rather than one."""
+    state_a, old_queue_a, target_a = build_scale_scenario()
+    plan_a = solve_crp(state_a, old_queue_a, time_limit_sec=5.0)
+    new_queue_a = force_urgent_insertion(old_queue_a, target_a)
+    urgent_a = [target_a]
+
+    state_b, old_queue_b, target_b = build_scale_scenario_b()
+    plan_b = solve_crp(state_b, old_queue_b, time_limit_sec=5.0)
+    new_queue_b = force_urgent_insertion(old_queue_b, target_b)
+    urgent_b = [target_b]
+
+    def _realized_cost(decision) -> float:
+        # decision.j_new reports the best CONSIDERED candidate's score in
+        # both branches of Step 8 (it feeds the tau comparison itself) --
+        # not the cost of whichever plan is actually in effect afterward.
+        # On KEEP, the plan actually kept is plan_old (cost j_old); only on
+        # UPDATE does the realized cost equal j_new (=j_best, now adopted).
+        return decision.j_old if decision.decision == "KEEP" else decision.j_new
+
+    def run_path(use_lookahead: bool) -> dict:
+        rng = random.Random(seed)
+        decision_a = replan(state_a, plan_a, old_queue_a, new_queue_a, urgent_a, rng=rng,
+                             conf_new=SCALE_EVENT_CONFIDENCE, time_limit_sec=5.0)
+        carried = decision_a.carried_gain_next if use_lookahead else 0.0
+        decision_b = replan(state_b, plan_b, old_queue_b, new_queue_b, urgent_b, rng=rng,
+                             conf_new=SCALE_EVENT_CONFIDENCE, time_limit_sec=5.0, carried_gain=carried)
+        total_cost = _realized_cost(decision_a) + _realized_cost(decision_b)
+        return {"total_cost": total_cost, "decision_b": decision_b.decision}
+
+    myopic = run_path(use_lookahead=False)
+    lookahead = run_path(use_lookahead=True)
+    return {
+        "seed": seed,
+        "myopic_total": myopic["total_cost"],
+        "lookahead_total": lookahead["total_cost"],
+        "myopic_decision_b": myopic["decision_b"],
+        "lookahead_decision_b": lookahead["decision_b"],
+        "diff": myopic["total_cost"] - lookahead["total_cost"],
+        "lookahead_better": lookahead["total_cost"] < myopic["total_cost"],
+    }
+
+
 def main():
     _start = time.monotonic()
 
@@ -315,9 +396,26 @@ def main():
     print(f"myopic_total - lookahead_total: mean={sum(diffs_d) / len(diffs_d):.4f}, "
           f"min={min(diffs_d):.4f}, max={max(diffs_d):.4f}")
 
+    print("\n=== Scenario E: statistically-powered lookahead-margin comparison (2 chained instances) ===")
+    results_e = [run_scenario_e(seed) for seed in REPORT_SEEDS]
+    myopic_totals = [r["myopic_total"] for r in results_e]
+    lookahead_totals = [r["lookahead_total"] for r in results_e]
+    updates_myopic = sum(r["myopic_decision_b"] == "UPDATE" for r in results_e)
+    updates_lookahead = sum(r["lookahead_decision_b"] == "UPDATE" for r in results_e)
+    better_count_e = sum(r["lookahead_better"] for r in results_e)
+    wilcoxon_result = wilcoxon_signed_rank(lookahead_totals, myopic_totals)
+    delta = cliffs_delta(lookahead_totals, myopic_totals)
+    print(f"event B UPDATE rate: myopic={updates_myopic}/{len(REPORT_SEEDS)}, lookahead={updates_lookahead}/{len(REPORT_SEEDS)}")
+    print(f"lookahead better on {better_count_e}/{len(REPORT_SEEDS)} seeds")
+    print(f"Wilcoxon (lookahead vs myopic, paired by seed): p={wilcoxon_result.p_value:.6f}, "
+          f"n_nonzero_pairs={wilcoxon_result.n_nonzero_pairs}/{wilcoxon_result.n_pairs}, Cliff's delta={delta:.3f}")
+
     log_run(
         "run_existence_proof.py",
-        {"seeds": list(REPORT_SEEDS), "target_a": TARGET, "target_b": results_b[0]["target"]},
+        {
+            "seeds": list(REPORT_SEEDS), "target_a": TARGET, "target_b": results_b[0]["target"],
+            "scenario_e_wilcoxon_p": wilcoxon_result.p_value, "scenario_e_cliffs_delta": delta,
+        },
         time.monotonic() - _start, [],
     )
 
