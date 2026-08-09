@@ -51,6 +51,7 @@ A6 No Blocking Impact & Impact estimate excludes $I_{blocking}$ \\
 \hline
 \end{tabular}
 \caption{B1--B6 (spec \S22, \S40) and A1--A6 (spec \S25), as implemented in \texttt{sarcrp.baselines} and \texttt{sarcrp.ablations}.}
+\label{tab:baselines}
 \end{table}
 
 \section{Experiment 1: Main Factorial Results}
@@ -385,6 +386,53 @@ windows, where subsequent steps' own costs already depend on which plan
 was carried forward). A dedicated realized-cost helper is used for
 Scenario E's own accounting.
 
+\textbf{Is Scenario E's win an artifact of letting \texttt{carried\_gain}
+accumulate with no bound and no decay?} \texttt{carried\_gain\_cap} and
+\texttt{carried\_gain\_decay} are opt-in ablation hooks on
+\texttt{\_apply\_fallback\_margin} (default \texttt{None}/\texttt{1.0}
+reproduce the validated mechanism above exactly). Rerunning Scenario E on
+\texttt{REPORT\_SEEDS} under three variants: \texttt{decayed\_half}
+(\texttt{carried\_gain\_decay=0.5}, halving the incoming carry every hop)
+reproduces the default result exactly (UPDATE@B 18/20, Cliff's
+$\delta=-0.9$) -- decay alone changes nothing here, because instance A's
+carry combined with instance B's own gain still clears B's margin even at
+half strength. \texttt{capped\_tight} (\texttt{carried\_gain\_cap=0.05},
+deliberately far below the real carry, $\approx$0.21) erases the win
+entirely (UPDATE@B 0/20, Cliff's $\delta=0.0$) -- an under-sized cap, not
+decay, is what breaks the mechanism. This is not evidence the mechanism is
+fragile; it is the expected behavior of a cap that is set below the
+quantity it is meant to bound, and it means any production deployment of
+\texttt{carried\_gain\_cap} must be sized relative to the gains the target
+benchmark actually produces, not chosen as an arbitrary safety constant.
+
+\textbf{Does the sub-margin-gain pattern behind instances A/B recur more
+generally, or was instance B a one-off?} \texttt{sweep\_chained\_instances.py}
+sweeps 22 further (num\_stacks, containers\_per\_stack) pairs -- built with
+the identical deterministic bottom-first round-robin recipe, excluding the
+two combinations already used for A (10$\times$5) and B (11$\times$4) --
+with a cheap 2-seed filter followed by a full 20-seed confirmation on any
+candidate that passes it. Two more instances reproduce the qualitative
+pattern (a real, positive, but sub-margin gain from forcing the
+last-in-queue container to the front): 7$\times$5=35 containers (gain
+$\approx$0.0084 on 20/20 seeds, $\tau\approx$0.485) and 8$\times$8=64
+containers (gain $\approx$0.0026 on 15/20 seeds, 0 on the other 5,
+$\tau\approx$1.125) -- confirming the pattern is not unique to instance
+B's specific dimensions. \textbf{However, neither is a working
+\emph{chain partner} for A or B like Scenario E's pair was.} Instance
+A/B's own gain-to-$\tau$ ratio is $\approx$0.2119/0.4649$\approx$0.456;
+the two new instances' ratios are $\approx$0.017 and $\approx$0.0023
+respectively -- two orders of magnitude smaller. Summing either new
+instance's gain with A's carried 0.2119 (0.2119+0.0084=0.2203,
+0.2119+0.0026=0.2145) stays far under either instance's own $\tau$
+($\approx$0.485, $\approx$1.125), so no chain built from these four
+instances in any order flips a second decision to \texttt{UPDATE}. This
+sharpens, rather than undermines, Scenario E's scope: the lookahead
+margin's demonstrated win depends on finding two instances whose
+sub-margin gains are close in magnitude to a shared decision's $\tau$, not
+merely on finding any two instances that individually show a real,
+positive, sub-margin gain -- a narrower, now explicitly characterized
+condition, identified by a blind sweep rather than assumed.
+
 \section{Experiment 3: Cross-Layout}
 
 Layout A (\texttt{small\_layout\_mvp.json}, 10 containers, timeout 1.0s),
@@ -554,6 +602,142 @@ decision the model actually makes; the $-48\%$ result reflects the model's
 own relocation choices scored under a different objective than it was
 trained for, not a translation defect.
 
+\textbf{Objective-fairness resolved directly: is $-48\%$ a real quality gap
+or an objective mismatch?} \texttt{run\_crp\_rl\_native\_cost\_comparison.py}
+settles this by replaying both greedy's and CRP\_RL's own decoded move
+sequences through CRP\_RL's own native cost engine
+(\texttt{env.env.Env}'s travel-time model, $t_{pd}{=}30$, $t_{acc}{=}40$,
+$t_{bay}{=}3.5$, $t_{row}{=}1.2$ -- the exact metric CRP\_RL was trained to
+minimize), on the identical instance/tensor, with no model or objective
+code involved in the replay itself. Two results:
+(1) On this project's own flat-stack schema ($n_{rows}{=}1$ always,
+\texttt{crp\_rl\_scale\_fairness\_50}), CRP\_RL loses even under its own
+native metric (17617.8 vs.\ greedy's 11946.3, with more relocations too:
+108 vs.\ 61) -- a real quality gap on this schema, not merely an objective
+mismatch. (2) On a genuine multi-row Lee instance (R020306, 2 bays
+$\times$ 3 rows $\times$ 6 tiers -- CRP\_RL's own training geometry, parsed
+with a from-scratch reimplementation of \texttt{benchmarks.benchmarks.}
+\texttt{parse\_container\_file}'s exact logic to avoid an unnecessary
+\texttt{pandas} dependency), CRP\_RL \emph{wins} under its own native
+metric (1331.7 vs.\ greedy's 1700.1, fewer relocations too: 10 vs.\ 11).
+Together these separate two previously entangled explanations: the
+flat-stack schema (permanently $n_{rows}{=}1$, so every cross-stack
+relocation is a cross-bay one, with no cheap same-bay/different-row option
+CRP\_RL's training distribution normally offers) is a genuine degenerate
+case for this specific model, independent of any general claim about
+CRP\_RL's relocation quality -- which the multi-row result shows is
+otherwise sound, even by its own metric.
+
+\section{Related Work and Positioning}
+\label{sec:related-work}
+
+SAR-CRP's contribution is a \emph{replanning policy} -- deciding whether,
+when, and how much of an existing plan to touch as retrieval information
+changes -- layered on top of a CRP solver, not a new CRP solver itself.
+This section makes explicit, with real citations checked for this report,
+why B1--B5 (Table~\ref{tab:baselines}) are the right reference class for
+that contribution, and why no directly competing named policy from the
+CRP-specific literature was found to reimplement.
+
+\textbf{The freeze horizon has a 1987 origin in production scheduling, not
+CRP.} Sridharan, Berry, and Udayabhanu, ``Freezing the Master Production
+Schedule Under Rolling Planning Horizons'' (\emph{Management Science}
+33(9):1137--1149, 1987, DOI \texttt{10.1287/mnsc.33.9.1137}) study exactly
+the tradeoff $h_f$ quantifies here: freezing part of a rolling schedule
+limits instability but can raise operating cost, and their simulation
+finds freezing up to roughly half the horizon has only a marginal cost
+effect across a wide range of conditions. SAR-CRP's freeze horizon is a
+CRP-specific instantiation of this 37-year-old production-scheduling
+mechanism, not a novel idea in isolation -- what is new here is combining
+it with an explicit, estimated impact trigger and a stability-aware
+fallback margin in the CRP setting.
+
+\textbf{The switching-cost-vs-operational-cost tradeoff underlying
+$\lambda \cdot \text{stability\_cost}$ and the fallback margin
+(EstimatedGain $>$ SwitchingCost $+ \tau$) is the central object of
+smoothed online convex optimization (SOCO).} Goel and Wierman,
+``Smoothed Online Optimization for Regression and Control''
+(arXiv:1810.10132, 2018) formalize this exact tradeoff -- a per-round
+operating cost for the current decision versus a switching cost for
+changing it -- and give competitively-analyzed algorithms (e.g.\ Online
+Balanced Descent) for when to switch. SAR-CRP's Step 8 fallback margin
+and its carried-gain lookahead extension (\S\ref{sec:lookahead}) are, in
+this light, a domain-specific (CRP), empirically-validated instantiation
+of the SOCO switch/hold decision, not a mechanism invented from nothing;
+positioning it this way is more defensible than searching for a
+CRP-specific paper that does not exist.
+
+\textbf{Event-triggered control is the general ``when to act on a
+threshold'' lineage.} Yaqoob, ``A Recent Survey of Event Triggered
+Control of Nonlinear Systems'' (arXiv:2202.01684, 2022) surveys the
+broader control-theory literature on triggering an update only when a
+measured deviation crosses a threshold, rather than on every clock tick --
+conceptually the same shape as SAR-CRP's impact-threshold trigger
+($\theta_{\text{impact}}$), applied there to networked/nonlinear control
+rather than logistics. The relevance is at the level of the general
+principle (deviation-triggered updates dominate periodic ones when
+updates are costly), not a specific competing algorithm.
+
+\textbf{Comparing rescheduling-scope policies is an established empirical
+design in container-terminal literature, just for different equipment.}
+Cai, Huang, Liu, and Dissanayake, ``Rescheduling Policies for Large-Scale
+Task Allocation of Autonomous Straddle Carriers under Uncertainty at
+Automated Container Terminals'' (\emph{Robotics and Autonomous Systems}
+62(4):506--514, 2014) directly compare two rescheduling-scope policies --
+RNJ (reschedule only the newly arrived job) and RCJ (reschedule the new
+job combined with unexecuted ones) -- for straddle-carrier task
+allocation, finding RCJ's wider scope wins on their cost function. This
+is the same policy-comparison design as B1--B5 (does touching more of the
+existing plan pay for itself), applied to a different piece of yard
+equipment (carriers, not cranes/CRP) -- it supports that comparing
+rescheduling-scope policies, rather than one specific named algorithm, is
+the standard empirical pattern in this literature family, not a pattern
+invented for this report.
+
+\textbf{What was checked and ruled out as a directly competing named
+policy: Zhou and Zhang (2024), ``Real-Time Batch Optimization for the
+Stochastic Container Relocation Problem'' (\emph{Applied Sciences}
+14(6):2624, DOI \texttt{10.3390/app14062624}).} This report's citation
+list already referenced this paper; for this revision its full text was
+read (not just its DOI/venue) to assess whether its proposed heuristic,
+SPFH (Sequential-Placement First Heuristic), is a reimplementable,
+directly competing baseline. It is not, for a specific, checkable reason
+rather than a schedule-driven judgment call: SPFH solves a structurally
+different sub-problem -- optimizing the pickup order and relocations
+\emph{within one operation round} for a \emph{batch of containers tied at
+the same retrieval priority} (containers share an appointment time
+window), using a brute-force permutation search over those ties
+(Algorithms 1--3 of that paper, GenerateSequence/Simulation-Evaluation).
+It answers ``given a batch with ties, what pickup order minimizes
+relocations,'' not ``should the existing plan be touched at all, and how
+much.'' Forcing it onto this report's total-order (no-tie) retrieval
+queues would strip out exactly the mechanism SPFH contributes (search
+over ties), making any resulting comparison uninformative in either
+direction. The paper's own stated limitation reinforces this: its
+permutation search is between $m!$ and $n!$ in the batch size, and the
+authors themselves report needing $>$2000s per instance once a batch
+exceeds roughly 10 target containers -- far below the 44--50-container
+scale this report's existence-proof experiments use, so a naive port
+would run into a scaling wall the original authors already identified,
+not a fair stress test of either method. SPFH's own baselines (EM, ERI
+from Galle et al.\ 2018; PBFS, PBFSA from Ku and Arthanari 2016) are
+CRP-solving heuristics on a different comparison axis than B1--B5's
+replanning-policy spectrum, for the same reason CRP\_RL
+(\S\ref{sec:real-solver}) sits at the solver layer, not the policy layer.
+
+\textbf{Summary of the positioning claim.} No published policy was found
+that directly competes with SAR-CRP's specific combination (estimated
+impact trigger + freeze horizon + stability-aware local-search repair +
+lookahead fallback margin) on the CRP replanning problem as defined here.
+B1--B5 instantiate the standard alternative-policy spectrum this
+literature family uses when no single named competitor exists (never
+update, always update, periodic, event-triggered without a stability
+term, MPC-style receding horizon); CRP\_RL (\S\ref{sec:real-solver})
+provides the solver-layer SOTA comparison; Sridharan et al.\ (1987) and
+Goel and Wierman (2018) ground the freeze-horizon and switching-cost
+mechanisms in established, non-CRP-specific theory rather than presenting
+them as invented from nothing.
+
 \section{External Validity: Real Literature Benchmarks}
 \label{sec:lee-shin}
 
@@ -646,25 +830,41 @@ fix, git commit \texttt{2617a50}).
   \item \textbf{\texttt{I\_blocking} (\S8.4/\S44.3, $w_b=0.25$, tied for the
     largest impact weight) is structurally always 0 in this suite, which
     also means the impact score's own attainable ceiling is 0.75, not
-    1.0.} Every call site passes the same physical state for both ``old''
-    and ``new'' because Paper 1's simulator never executes an action's
-    physical effect between events (\texttt{commit\_status} never becomes
-    \texttt{"committed"} anywhere in \texttt{src/}) -- giving this term real
-    signal needs a physical-execution model, which is explicitly Paper 2's
-    scope (``imperfect execution''), not Paper 1's. Ablation A6 (No
-    Blocking Impact) is consequently a no-op vs.\ default SAR-CRP in this
-    report, not evidence blocking pressure is unimportant. A direct
-    consequence, not previously stated explicitly: with $w_b$ permanently
-    contributing 0, the four live terms ($w_o+w_t+w_p+w_c=0.75$) cap
-    Impact.total at 0.75, not 1.0 -- so $\theta_{\text{impact}}=0.30$ is
-    being compared against an \emph{effective} range of $[0, 0.75]$, not
-    the $[0,1]$ its own value suggests. This does not change any number
-    already reported (the trigger check is a direct threshold comparison,
-    unaffected by what the nominal ceiling ``should'' be), but a reviewer
-    calibrating or re-deriving $\theta_{\text{impact}}$ from first
-    principles would need this fact stated, not left implicit.
-  \item \textbf{CRP\_RL comparison caveat} as stated in \S\ref{sec:real-solver} above:
-    rescoring under SAR-CRP's own objective, not CRP\_RL's native metric.
+    1.0 -- and honestly renormalizing changes real numbers, not just a
+    rounding footnote.} Every call site passes the same physical state for
+    both ``old'' and ``new'' because Paper 1's simulator never executes an
+    action's physical effect between events (\texttt{commit\_status} never
+    becomes \texttt{"committed"} anywhere in \texttt{src/}) -- giving this
+    term real signal needs a physical-execution model, which is explicitly
+    Paper 2's scope (``imperfect execution''), not Paper 1's. Ablation A6
+    (No Blocking Impact) is consequently a no-op vs.\ default SAR-CRP in
+    this report, not evidence blocking pressure is unimportant.
+    \texttt{sarcrp.impact\_estimator.NORMALIZED\_WEIGHTS} redistributes
+    $w_b$'s mass across the four live terms
+    ($w_o{=}0.25,w_t{=}0.20,w_p{=}0.20,w_c{=}0.10 \to 0.75$) so the
+    effective ceiling is honestly 1.0 again. Rerun on
+    \texttt{REPORT\_SEEDS}: mean\_impact goes $0.087 \to 0.116$ (exactly
+    $/0.75$, as expected when $I_{blocking}{=}0$ identically) and
+    trigger\_rate roughly triples, $5.3\% \to 12.1\%$ -- a real change,
+    not noise, since some events sat in the $[0.225, 0.30)$ band that only
+    clears $\theta_{\text{impact}}=0.30$ after normalization. SC4 (mean
+    impact in $[0.2,0.8]$) still fails under both weightings, so the
+    ``trigger rarely fires on this random benchmark'' finding survives the
+    fix, but the true trigger rate on this benchmark is closer to 12\%
+    than the 4--5\% a reader would compute from the nominal weights alone.
+  \item \textbf{CRP\_RL comparison caveat, now resolved with a direct
+    test rather than left as a caveat.} \S\ref{sec:real-solver}'s $-48\%$
+    figure rescores CRP\_RL's own decisions under SAR-CRP's objective, not
+    CRP\_RL's native travel-time metric -- raising the question of whether
+    that gap is a genuine quality difference or an objective mismatch.
+    Replaying both methods' move sequences through CRP\_RL's own native
+    cost engine (\S\ref{sec:real-solver}) answers this directly and with a
+    nuance: CRP\_RL loses even under its own metric on this project's
+    flat-stack ($n_{rows}{=}1$) schema (a real quality gap there), but
+    \emph{wins} under its own metric on a genuine multi-row Lee instance
+    matching its own training geometry -- so the flat-stack schema is a
+    genuine degenerate case for this model, not evidence of a general
+    quality problem.
   \item \textbf{External validity (\S\ref{sec:lee-shin}) is now partially
     addressed, not fully.} Two real Lee et al.\ instances (20 and 70
     containers) confirm the same pattern found throughout this suite on
@@ -673,7 +873,25 @@ fix, git commit \texttt{2617a50}).
     containers and an ``upside-down'' variant, left to future work.
   \item \textbf{Base-paper citations} (Shin et al.\ 2026, Zhou \& Zhang
     2024, Zhang et al.\ 2025) were verified for DOI/venue in an earlier
-    phase of this project but are not re-verified in this report.
+    phase of this project. For this revision, Zhou \& Zhang (2024) was
+    re-read in full (not just DOI/venue) to assess it as a potential
+    directly-competing baseline -- see \S\ref{sec:related-work}, which
+    also adds three further citations (Sridharan et al.\ 1987, Goel \&
+    Wierman 2018, Cai et al.\ 2014) checked specifically for this
+    revision, none previously in this report's citation list. Shin et al.\
+    2026 and Zhang et al.\ 2025 were not re-verified beyond the earlier
+    phase's DOI/venue check.
+  \item \textbf{No directly competing named replanning-policy baseline
+    from the CRP-specific literature was found or reimplemented.}
+    \S\ref{sec:related-work} documents the search and the specific,
+    checkable reason the closest candidate (SPFH, Zhou \& Zhang 2024) does
+    not qualify (different sub-problem: batch/tie-priority pickup-order
+    optimization within one round, not a replanning-policy decision, with
+    its own authors' stated factorial-complexity limit well below this
+    report's 44--50-container scale). B1--B5 and CRP\_RL together cover
+    the policy-layer and solver-layer comparisons this literature family
+    supports; a reviewer expecting a single named head-to-head competitor
+    on this exact problem will not find one, because none was located.
 \end{itemize}
 
 \section{Conclusion}
@@ -723,7 +941,12 @@ instance A, keeping the one that reproduced instance A's own
 sub-margin-gain pattern) to chain a genuine second opportunity on
 purpose, on every seed: plain \texttt{"sarcrp"} never updates there
 (0/20), \texttt{"sarcrp\_lookahead"} updates on 18/20
-($p=2.2\times10^{-5}$, Cliff's $\delta=-0.9$). Separately,
+($p=2.2\times10^{-5}$, Cliff's $\delta=-0.9$ -- a large effect \emph{within
+this specific, constructed two-instance chain}; it quantifies how
+reliably the mechanism wins once a real second opportunity has been
+arranged to exist, not an estimate of how large the benefit would be if
+sampled from a natural event-stream distribution, which \S20's SC4 already
+shows presents such opportunities rarely in the first place). Separately,
 \S\ref{sec:lee-shin} confirms this suite's central pattern (SAR-CRP tying
 Static under default parameters, on this benchmark family) also holds on
 two real Lee et al.\ literature benchmark instances this project did not
@@ -732,14 +955,24 @@ explanation.
 
 Paper 1's central question is therefore no longer ``does the mechanism
 work'' (it does, end-to-end, as specified, and now demonstrably wins with
-real statistical power when given a repeat opportunity) and no longer
-``can a harder benchmark be found'' (tried at small and industrial scale,
-and on real literature data, without retuning any default parameter).
-What remains is quantitative, not qualitative: how often a real
-deployment's own event stream presents a \emph{first} triggering
-opportunity at all (\S20 SC4 already answers this for the current
-benchmark: rarely) -- a scoped, concrete, evidenced question about
-benchmark/event-stream design, not an open question about whether the
-underlying lookahead idea works.
+real statistical power \emph{when a repeat sub-margin opportunity is
+constructed to exist}) and no longer ``can a harder benchmark be found''
+(tried at small and industrial scale, and on real literature data,
+without retuning any default parameter). \textbf{The contribution this
+report can defend is therefore scoped, not general: SAR-CRP's
+trigger+freeze+repair+lookahead pipeline is demonstrated to be correct
+and, conditional on a genuine recurring opportunity, to deliver a real,
+statistically significant improvement over the memoryless baseline -- not
+a demonstrated general superiority over Static/FullReopt/Periodic/MPC on
+naturally-arising event streams, where the mechanism mostly ties with
+Static because the trigger rarely fires at all (\S20 SC4).} What remains
+open is quantitative, not qualitative: how often a real deployment's own
+event stream presents a \emph{first} triggering opportunity, let alone a
+second one to chain -- \S\ref{sec:related-work} positions this pipeline
+against the closest available theory (rolling-horizon freezing, smoothed
+online optimization's switching-cost tradeoff, event-triggered control)
+in the absence of a directly competing named policy in the CRP-specific
+literature, rather than claiming a head-to-head win this report's own
+evidence does not support.
 
 \end{document}
