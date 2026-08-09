@@ -1,6 +1,8 @@
 \documentclass[11pt]{article}
 \usepackage[margin=1in]{geometry}
 \usepackage{amsmath}
+\usepackage{graphicx}
+\usepackage{url}
 
 \title{Paper 1 (SAR-CRP v2 Core) --- Full Q1 Experiment Suite Report}
 \author{}
@@ -61,6 +63,155 @@ lookahead margin is where this report's real, validated -- both proved
 and measured -- contribution lies.
 \end{abstract}
 
+\section{Introduction}
+\label{sec:intro}
+
+Container yards retrieve stacked containers in a priority order (the
+\emph{retrieval queue}) that changes as trucks arrive, orders are
+reprioritized, or estimated-time-of-arrival information updates. Because
+containers are stacked (last-in-first-out per stack), retrieving one
+container out of order may require \emph{relocating} others first -- the
+classical Container Relocation Problem (CRP). A \emph{plan} is a sequence
+of relocate/retrieve actions solving the CRP for a given queue. The
+question this paper studies is not how to solve the CRP itself (a
+30-year-old, extensively studied problem -- see \S\ref{sec:related-work}),
+but a narrower, dynamic one: \textbf{once a plan exists and the retrieval
+queue then changes, should the plan be replanned at all, and if so, how
+much of it should be touched}, given that replanning itself has a cost
+(operator disruption, re-sequencing overhead, lost stability)?
+
+This is a decision-policy question, not a solving question, and it
+recurs across control and operations-research literature under different
+names -- event-triggered control (react to a deviation crossing a
+threshold, not every clock tick), rolling-horizon scheduling with a
+frozen prefix (limit how much of a plan can change per revision), and
+smoothed online optimization (trade an operating cost against a switching
+cost). \S\ref{sec:related-work} positions this paper's method,
+SAR-CRP v2 (Stability-Aware Replanning for the CRP), as a CRP-specific
+instantiation and extension of these three ideas, combined for the first
+time (to the knowledge of this report) in the CRP setting, with a novel
+addition -- a carried-gain lookahead margin -- validated both
+theoretically (\S\ref{sec:theory}) and empirically
+(\S\ref{sec:existence-proof}--\S\ref{sec:lookahead}).
+
+\textbf{Contributions.} (1) A checkable impact-trigger + freeze-horizon +
+stability-aware local-search-repair pipeline for CRP replanning, specified
+precisely in \S\ref{sec:formulation}, implemented, and validated end to
+end against 5 baseline policies, 6 ablations, a real independently-trained
+CRP reinforcement-learning solver, and real literature benchmark
+instances (\S\ref{sec:related-work}--\ref{sec:lee-shin}). (2) A
+carried-gain lookahead extension to the fallback margin, proven to be a
+bounded-overshoot lazy threshold policy (\S\ref{sec:theory}) and shown to
+deliver a real, statistically significant benefit when a genuine
+recurring opportunity exists (\S\ref{sec:lookahead}). (3) A full
+accounting of this evaluation's own limits: eight real implementation
+bugs found and fixed from the suite's own output and disclosed rather
+than silently corrected, and an honest characterization of when the
+mechanism's benefit does and does not materialize (\S\ref{sec:limitations}).
+
+\textbf{Series context.} This is the first of a five-paper sequence on
+container-yard replanning; later papers assume this paper's mechanisms as
+a baseline and add imperfect execution (Paper 2), multi-crane coordination
+(Paper 3), port-configurability (Paper 4), and human-in-the-loop learning
+(Paper 5). Concerns explicitly deferred to those papers (e.g.\ a physical
+execution model, discussed in \S\ref{sec:limitations}) are out of scope
+here by design, not by oversight.
+
+\section{Problem Formulation and Method}
+\label{sec:formulation}
+
+This section defines the model and objective precisely and
+self-containedly; \S\S\ref{sec:baselines}--\ref{sec:lee-shin} report
+experiments against this definition, and internal implementation
+cross-references (\texttt{spec \S}\emph{N}) point to this project's own
+extended specification document for engineering detail beyond what a
+reader needs to follow the results.
+
+\textbf{State and plan.} A yard state is $(W, Q, c)$: $W$ a set of
+stacks, each a list of containers bottom-to-top; $Q$ the retrieval queue
+(the priority order containers should be retrieved in); $c \in [0,1]$ a
+confidence in $Q$'s accuracy. A plan $P$ is a sequence of actions, each
+either \textsc{Relocate}(container, source stack, dest stack) or
+\textsc{Retrieve}(container); a container is retrievable only once it is
+top-of-stack. $P$ is \emph{valid} if it retrieves every container in $Q$,
+in non-decreasing priority order, without relocating a container to an
+already-full stack.
+
+\textbf{Objective.} Given a candidate plan $P$ and the previously-adopted
+plan $P_{old}$:
+\begin{align}
+J(P) &= C_{op}(P) + \lambda \, D(P, P_{old}) + \mu \, C_{data}(P) \label{eq:objective}\\
+C_{op}(P) &= \alpha \, R(P) + \beta \, \mathrm{RetrievalDelay}(P) + \gamma \, \mathrm{InvalidPenalty}(P) \label{eq:opcost}\\
+D(P, P_{old}) &= \sum_{i} e^{-\rho i} \, d_i(P, P_{old}) \label{eq:stability}\\
+C_{data}(P) &= \mathrm{Changes}(P, P_{old}) \cdot (1 - c_{new}) \label{eq:dataconf}
+\end{align}
+$R(P)$ is the relocation count; $\mathrm{RetrievalDelay}(P)$ sums, over
+urgent containers only, their normalized position in $P$;
+$\mathrm{InvalidPenalty}(P)$ is $0$ if $P$ is valid and a large constant
+($10^6$) otherwise. $d_i$ (Eq.~\ref{eq:stability}) is a per-step-index
+action-distance penalty between $P$ and $P_{old}$ (container/type/
+destination changes each add a fixed penalty; a change inside the frozen
+prefix, defined below, contributes $+\infty$), discounted geometrically by
+position so early changes cost more than late ones -- this is the
+\emph{stability cost}, the formal cost of a plan revision. $\mathrm{Changes}$
+(Eq.~\ref{eq:dataconf}) counts actions that differ by index between $P$
+and $P_{old}$, scaled by how unreliable the new retrieval information
+$c_{new}$ is -- acting on low-confidence information should cost more.
+Default penalty weights and $(\alpha,\beta,\gamma,\lambda,\mu,\rho)$ are
+listed in Table~\ref{tab:baselines}'s caption and \S\ref{sec:reproducibility}'s
+logged run parameters.
+
+\textbf{Impact and trigger.} When the retrieval queue changes from
+$Q_{old}$ to $Q_{new}$ (with new confidence $c_{new}$), an impact score
+estimates how disruptive this change is \emph{before} committing to any
+repair work:
+\begin{equation}
+\mathrm{Impact} = w_o I_{order} + w_t I_{target} + w_b I_{blocking} + w_p I_{plan} + w_c I_{conf}
+\label{eq:impact}
+\end{equation}
+$I_{order}$ is the normalized Kendall-tau distance between $Q_{old}$ and
+$Q_{new}$ restricted to their top-$k$ union; $I_{target}$ is a binary
+indicator that the single highest-priority container changed; $I_{blocking}$
+is a saturated ($1-e^{-x/\sigma_b}$) mean blocker-count change for that
+same top-$k$ union (structurally $0$ throughout this report --
+\S\ref{sec:limitations} discloses why); $I_{plan}$ is the fraction of
+$P_{old}$'s own actions whose container's priority rank shifted by more
+than a threshold $r_{shift}$; $I_{conf} = 1 - c_{new}$. Default weights
+$w = (0.25, 0.20, 0.25, 0.20, 0.10)$ (\texttt{DEFAULT\_WEIGHTS}) and their
+honestly-renormalized variant (\texttt{NORMALIZED\_WEIGHTS}, accounting
+for $I_{blocking}$'s structural $0$) are both used in
+\S\ref{sec:limitations}. If $\mathrm{Impact} < \theta_{\mathrm{impact}}$,
+the plan is kept unchanged (\texttt{KEEP}); otherwise repair is attempted.
+
+\textbf{Freeze horizon and candidate generation.} $P_{old}$'s first $h_f$
+actions are \emph{frozen}: any repair must leave them untouched (enforced
+by $d_i \to \infty$ in Eq.~\ref{eq:stability} for a frozen-index change).
+Four candidates are scored via Eq.~\ref{eq:objective} and the cheapest is
+kept: $C_0 = P_{old}$ unchanged; $C_1$, a minimal feasibility repair; $C_2$,
+a local-search repair over the unfrozen suffix (five neighborhood moves,
+epsilon-greedy, best-seen tracked); $C_3$, the frozen prefix followed by a
+fresh solve of the remaining queue against the post-prefix state. Let
+$J_{old} = J(P_{old})$ and $J_{best} = \min_i J(C_i)$.
+
+\textbf{Fallback margin.} A repair is adopted only if its estimated gain
+clears a hysteresis margin, $\tau = \tau_{\mathrm{frac}} \cdot J_{old}$:
+$\mathrm{UPDATE}$ if $J_{old} - J_{best} > \tau$, else $\mathrm{KEEP}$
+(spec \S9's original criterion). \S\ref{sec:lookahead} extends this with a
+\texttt{carried\_gain} term threading foregone sub-margin gains across
+rounds, characterized formally in \S\ref{sec:theory}.
+
+\begin{figure}[h]
+\centering
+\includegraphics[width=0.95\textwidth]{figures/pipeline.pdf}
+\caption{SAR-CRP v2's replanning decision pipeline: an estimated-impact
+trigger gates whether repair is attempted at all; a freeze horizon bounds
+how much of the plan can change; four candidates are scored under
+Eq.~\ref{eq:objective}; a hysteresis fallback margin (extended with the
+carried-gain lookahead, \S\ref{sec:theory}) gates whether the best
+candidate is actually adopted.}
+\label{fig:pipeline}
+\end{figure}
+
 \section{Setup}
 
 \textbf{Hardware.} All computation ran on the remote CPU server
@@ -79,6 +230,7 @@ number below uses \texttt{REPORT\_SEEDS} (spec \S23.6's $\ge$20-seed
 minimum), never \texttt{DEV\_SEEDS}.
 
 \section{Baselines and Ablations Implemented}
+\label{sec:baselines}
 
 \begin{table}[h]
 \centering
@@ -163,6 +315,18 @@ high   & SAR-CRP                       & 7.059  & 7.059 & 0.00  & 1.000 \\
 \end{tabular}
 \caption{Experiment 1: mean over freeze\_size $\times$ $\lambda$ $\times$ 20 seeds ($n=180$ per row). Source: \texttt{experiments/results/experiment1\_results.csv}, post MPC fix (commit 2617a50).}
 \end{table}
+
+\begin{figure}[h]
+\centering
+\includegraphics[width=0.85\textwidth]{figures/exp1_cost.pdf}
+\caption{Experiment 1's total cost by method and uncertainty level (Table
+above, plotted). SAR-CRP's bar is visually indistinguishable from
+Static's (both default to never touching the plan here, because the
+trigger essentially never fires -- \S20 SC4) while Full Reoptimization,
+Periodic, and MPC all pay a visible, real cost for reoptimizing/switching
+on every event regardless of whether it was worth it.}
+\label{fig:exp1-cost}
+\end{figure}
 
 \textbf{SAR-CRP vs.\ each baseline (spec \S23.6 protocol: paired Wilcoxon
 signed-rank, \texttt{zero\_method="pratt"}, Holm--Bonferroni correction
@@ -720,7 +884,7 @@ KEEP.
 \label{sec:real-solver}
 
 \texttt{sarcrp.crp\_rl\_adapter} wraps the real trained CRP\_RL model
-(Shin et al.\ 2026, MIT-licensed code) behind the \texttt{solve\_crp}
+(Shin et al.\ 2026~\cite{shin2026}, MIT-licensed code) behind the \texttt{solve\_crp}
 interface, reusing only its relocation \emph{decisions} -- the resulting
 plan is scored by this project's own \texttt{objective.py}, not CRP\_RL's
 own travel-time cost model.
@@ -803,9 +967,8 @@ that contribution, and why no directly competing named policy from the
 CRP-specific literature was found to reimplement.
 
 \textbf{The freeze horizon has a 1987 origin in production scheduling, not
-CRP.} Sridharan, Berry, and Udayabhanu, ``Freezing the Master Production
-Schedule Under Rolling Planning Horizons'' (\emph{Management Science}
-33(9):1137--1149, 1987, DOI \texttt{10.1287/mnsc.33.9.1137}) study exactly
+CRP.} Sridharan, Berry, and Udayabhanu~\cite{sridharan1987}, ``Freezing the Master Production
+Schedule Under Rolling Planning Horizons'' study exactly
 the tradeoff $h_f$ quantifies here: freezing part of a rolling schedule
 limits instability but can raise operating cost, and their simulation
 finds freezing up to roughly half the horizon has only a marginal cost
@@ -818,9 +981,9 @@ fallback margin in the CRP setting.
 \textbf{The switching-cost-vs-operational-cost tradeoff underlying
 $\lambda \cdot \text{stability\_cost}$ and the fallback margin
 (EstimatedGain $>$ SwitchingCost $+ \tau$) is the central object of
-smoothed online convex optimization (SOCO).} Goel and Wierman,
+smoothed online convex optimization (SOCO).} Goel and Wierman~\cite{goel2018},
 ``Smoothed Online Optimization for Regression and Control''
-(arXiv:1810.10132, 2018) formalize this exact tradeoff -- a per-round
+formalize this exact tradeoff -- a per-round
 operating cost for the current decision versus a switching cost for
 changing it -- and give competitively-analyzed algorithms (e.g.\ Online
 Balanced Descent) for when to switch. SAR-CRP's Step 8 fallback margin
@@ -831,8 +994,8 @@ positioning it this way is more defensible than searching for a
 CRP-specific paper that does not exist.
 
 \textbf{Event-triggered control is the general ``when to act on a
-threshold'' lineage.} Yaqoob, ``A Recent Survey of Event Triggered
-Control of Nonlinear Systems'' (arXiv:2202.01684, 2022) surveys the
+threshold'' lineage.} Yaqoob~\cite{yaqoob2022}, ``A Recent Survey of Event Triggered
+Control of Nonlinear Systems'' surveys the
 broader control-theory literature on triggering an update only when a
 measured deviation crosses a threshold, rather than on every clock tick --
 conceptually the same shape as SAR-CRP's impact-threshold trigger
@@ -843,10 +1006,9 @@ updates are costly), not a specific competing algorithm.
 
 \textbf{Comparing rescheduling-scope policies is an established empirical
 design in container-terminal literature, just for different equipment.}
-Cai, Huang, Liu, and Dissanayake, ``Rescheduling Policies for Large-Scale
+Cai, Huang, Liu, and Dissanayake~\cite{cai2014}, ``Rescheduling Policies for Large-Scale
 Task Allocation of Autonomous Straddle Carriers under Uncertainty at
-Automated Container Terminals'' (\emph{Robotics and Autonomous Systems}
-62(4):506--514, 2014) directly compare two rescheduling-scope policies --
+Automated Container Terminals'' directly compare two rescheduling-scope policies --
 RNJ (reschedule only the newly arrived job) and RCJ (reschedule the new
 job combined with unexecuted ones) -- for straddle-carrier task
 allocation, finding RCJ's wider scope wins on their cost function. This
@@ -858,9 +1020,8 @@ the standard empirical pattern in this literature family, not a pattern
 invented for this report.
 
 \textbf{What was checked and ruled out as a directly competing named
-policy: Zhou and Zhang (2024), ``Real-Time Batch Optimization for the
-Stochastic Container Relocation Problem'' (\emph{Applied Sciences}
-14(6):2624, DOI \texttt{10.3390/app14062624}).} This report's citation
+policy: Zhou and Zhang (2024)~\cite{zhou2024}, ``Real-Time Batch Optimization for the
+Stochastic Container Relocation Problem''.} This report's citation
 list already referenced this paper; for this revision its full text was
 read (not just its DOI/venue) to assess whether its proposed heuristic,
 SPFH (Sequential-Placement First Heuristic), is a reimplementable,
@@ -913,7 +1074,7 @@ claim that a directly competing named policy was found and beaten.
 
 Every experiment above used this project's own hand-built or generated
 instances. \texttt{sarcrp.lee\_shin\_loader} parses CRP\_RL's own bundled
-Lee et al.\ benchmark instance files
+Lee et al.~\cite{lee2010} benchmark instance files
 (\texttt{external/CRP\_RL/benchmarks/Lee\_instances}, CRP\_RL's own
 on-disk format) into this project's \texttt{YardState} schema -- each
 (bay, row) pair becomes one flat stack (the same simplification
@@ -948,6 +1109,7 @@ This does not change this report's central finding, but it does rule out
 explanation: the same pattern holds on data this project did not construct.
 
 \section{Reproducibility}
+\label{sec:reproducibility}
 
 Every run cited above is recorded in
 \texttt{experiments/logs/run\_log.jsonl} (git commit, hostname, exact
@@ -1041,8 +1203,8 @@ fix, git commit \texttt{2617a50}).
     data this project did not construct. Only two instances, both
     ``random'' type, were tried; the full Lee/Shin suite spans up to 720
     containers and an ``upside-down'' variant, left to future work.
-  \item \textbf{Base-paper citations} (Shin et al.\ 2026, Zhou \& Zhang
-    2024, Zhang et al.\ 2025) were verified for DOI/venue in an earlier
+  \item \textbf{Base-paper citations} (Shin et al.\ 2026~\cite{shin2026}, Zhou \& Zhang
+    2024~\cite{zhou2024}, Zhang et al.\ 2025~\cite{zhang2025}) were verified for DOI/venue in an earlier
     phase of this project. For this revision, Zhou \& Zhang (2024) was
     re-read in full (not just DOI/venue) to assess it as a potential
     directly-competing baseline -- see \S\ref{sec:related-work}, which
@@ -1051,6 +1213,22 @@ fix, git commit \texttt{2617a50}).
     revision, none previously in this report's citation list. Shin et al.\
     2026 and Zhang et al.\ 2025 were not re-verified beyond the earlier
     phase's DOI/venue check.
+  \item \textbf{Zhang et al.\ 2025's citation is currently unearned:} it
+    was assigned to \texttt{YardState.pickup\_prob} (a retrieval-probability
+    field, matching that paper's Retrieval Probability Matrix concept) as
+    a base for future probabilistic-retrieval work, but a direct code
+    check for this revision confirms \texttt{pickup\_prob} is only ever
+    copied between states (\texttt{freeze\_horizon.py},
+    \texttt{local\_search\_repair.py}) -- never read by
+    \texttt{impact\_estimator.py}, \texttt{objective.py}, or any decision
+    logic in this report. No experiment in this suite is actually
+    affected by anything Zhang et al.\ 2025 proposes. The citation is
+    disclosed here as scoped to future work (a natural fit for Paper 5's
+    human-in-the-loop / operator-feedback setting, or an explicit
+    probabilistic extension of the impact trigger), not removed, because
+    it accurately signals intended future use -- but it must not be read
+    as evidence that this report's own results depend on or validate
+    that paper's method in any way.
   \item \textbf{No directly competing named replanning-policy baseline
     from the CRP-specific literature was found or reimplemented.}
     \S\ref{sec:related-work} documents the search and the specific,
@@ -1167,5 +1345,51 @@ the decay ablation did not, exactly because Scenario E never reaches
 Proposition 5's asymptotic regime). A theoretical claim confirmed by an
 independent empirical measurement, rather than either standing alone, is
 the strongest form of evidence this report has to offer.
+
+\begin{thebibliography}{9}
+
+\bibitem{lee2010}
+Y.~Lee and Y.~J.~Lee, ``A heuristic for retrieving containers from a
+yard,'' \emph{Computers \& Operations Research}, vol.~37, no.~6, pp.~1139--1147, 2010.
+
+\bibitem{shin2026}
+W.-J.~Shin, I.~Choi, S.-H.~Cho, and H.-J.~Kim, ``Learning to retrieve
+containers: A scale-diverse deep reinforcement learning approach for the
+container retrieval problem,'' \emph{Transportation Research Part C:
+Emerging Technologies}, vol.~183, art.~105496, 2026.
+\url{https://doi.org/10.1016/j.trc.2026.105496}
+
+\bibitem{zhou2024}
+S.~Zhou and Q.~Zhang, ``Real-Time Batch Optimization for the Stochastic
+Container Relocation Problem,'' \emph{Applied Sciences}, vol.~14, no.~6,
+art.~2624, 2024. \url{https://doi.org/10.3390/app14062624}
+
+\bibitem{zhang2025}
+Z.~Zhang, K.~C.~Tan, W.~Qin, Y.~Li, E.~P.~Chew, and K.~Xu, ``A
+Data-Driven Approach to Solving the Container Relocation Problem with
+Uncertainties,'' \emph{Advanced Engineering Informatics}, vol.~65,
+art.~103112, 2025. \url{https://doi.org/10.1016/j.aei.2025.103112}
+
+\bibitem{sridharan1987}
+S.~V.~Sridharan, W.~L.~Berry, and V.~Udayabhanu, ``Freezing the Master
+Production Schedule Under Rolling Planning Horizons,'' \emph{Management
+Science}, vol.~33, no.~9, pp.~1137--1149, 1987.
+\url{https://doi.org/10.1287/mnsc.33.9.1137}
+
+\bibitem{goel2018}
+G.~Goel and A.~Wierman, ``Smoothed Online Optimization for Regression and
+Control,'' arXiv:1810.10132, 2018.
+
+\bibitem{yaqoob2022}
+R.~Yaqoob, ``A Recent Survey of Event Triggered Control of Nonlinear
+Systems,'' arXiv:2202.01684, 2022.
+
+\bibitem{cai2014}
+B.~Cai, S.~Huang, D.~Liu, and G.~Dissanayake, ``Rescheduling Policies for
+Large-Scale Task Allocation of Autonomous Straddle Carriers under
+Uncertainty at Automated Container Terminals,'' \emph{Robotics and
+Autonomous Systems}, vol.~62, no.~4, pp.~506--514, 2014.
+
+\end{thebibliography}
 
 \end{document}
