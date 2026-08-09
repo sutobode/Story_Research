@@ -241,6 +241,21 @@ def test_carried_gain_cap_below_tau_minus_max_gain_causes_permanent_keep():
     assert all(math.isclose(carry, cap, rel_tol=1e-9) for _, carry in trace[5:])  # saturates at the cap
 
 
+def test_carried_gain_cap_sufficiency_holds_combined_with_decay_too():
+    # Proposition 4 is stated for ANY carried_gain_decay, not just the
+    # undecayed (decay=1.0) case the previous test checks -- decay can
+    # only shrink the incoming carry further (incoming <= C always,
+    # regardless of decay, since new_carry is re-capped at C every
+    # round), so the same sufficiency inequality (g < tau - C) must still
+    # guarantee permanent KEEP when a decay < 1.0 is also applied.
+    tau, cap, g, decay = 0.4649, 0.05, 0.2119, 0.5
+    assert cap < tau - g
+    gains = [g] * 100
+    trace = _run_gain_sequence(gains, tau, cap=cap, decay=decay)
+    assert all(decision == "KEEP" for decision, _ in trace)
+    assert all(carry <= cap + 1e-9 for _, carry in trace)
+
+
 def test_carried_gain_decay_steady_state_below_tau_causes_permanent_keep():
     # Proposition 5 (decay steady-state condition): under constant decay
     # lambda<1 and constant gain g repeated indefinitely, the carry

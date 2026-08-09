@@ -45,8 +45,11 @@ statistical power (18/20 seeds, Wilcoxon $p=2.2\times10^{-5}$, Cliff's
 $\delta=-0.9$) when a genuine second opportunity is constructed to
 exist -- a result a further generalization sweep shows depends on finding
 two instances with comparably-sized sub-margin gains, not on any two
-sub-margin instances, exactly as the theoretical bounded-overshoot
-condition predicts. Eight real implementation bugs were caught and fixed
+sub-margin instances (the arithmetic reason is straightforward: a carried
+gain only clears a second instance's own $\tau$ if the two are close
+enough in magnitude to begin with, a precondition distinct from, though
+related to, the timing guarantees Propositions 1--3 establish once such a
+pair exists). Eight real implementation bugs were caught and fixed
 directly from the suite's own output and are disclosed rather than
 silently corrected. No directly competing named replanning-policy
 baseline was found in the CRP-specific literature; we position the
