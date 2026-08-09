@@ -6,6 +6,17 @@ from sarcrp.state_ops import blocker_count
 
 DEFAULT_WEIGHTS = {"w_o": 0.25, "w_t": 0.20, "w_b": 0.25, "w_p": 0.20, "w_c": 0.10}
 
+# R1.1 (reviewer critique): i_blocking is structurally 0.0 in every experiment
+# this suite runs (see _blocking_impact's docstring -- Paper 1 never executes
+# an action's physical effect between two impact estimations, so state_old
+# and state_new are always identical). Under DEFAULT_WEIGHTS that silently
+# caps the achievable total at 0.75 (1 - w_b), so theta_impact=0.30 is really
+# being compared against 40% of the score's EFFECTIVE range, not 30% of its
+# nominal one. NORMALIZED_WEIGHTS redistributes w_b's mass proportionally
+# across the four live terms so the effective max is honestly 1.0 again --
+# total_normalized == total_default / 0.75 whenever i_blocking == 0.
+NORMALIZED_WEIGHTS = {"w_o": 0.25 / 0.75, "w_t": 0.20 / 0.75, "w_b": 0.0, "w_p": 0.20 / 0.75, "w_c": 0.10 / 0.75}
+
 
 @dataclass
 class ImpactBreakdown:

@@ -1,6 +1,6 @@
 import math
 from sarcrp.schemas import Layout, Stack, YardState, Action, Plan
-from sarcrp.impact_estimator import compute_impact, is_action_affected, _blocking_impact
+from sarcrp.impact_estimator import DEFAULT_WEIGHTS, NORMALIZED_WEIGHTS, compute_impact, is_action_affected, _blocking_impact
 
 
 def make_state(retrieval_queue):
@@ -111,6 +111,33 @@ def test_blocking_impact_uses_the_union_of_old_and_new_top_k_not_new_alone():
     delta_new_only = _blocking_impact(state_old, state_new, new_queue, new_queue, k=2, sigma_b=2.0)
     assert delta_new_only == 0.0  # C1/C2 alone: no change at all
     assert delta_union > 0.0  # union also picks up C5's real 2->0 change
+
+
+def test_normalized_weights_sum_to_one_and_zero_out_the_dead_blocking_term():
+    # R1.1 (reviewer critique): i_blocking is structurally 0.0 in every
+    # experiment this suite runs, so DEFAULT_WEIGHTS caps the achievable
+    # total at 0.75, not the nominal 1.0. NORMALIZED_WEIGHTS must
+    # redistribute that mass, not just drop it (A6_no_blocking_impact in
+    # ablations.py zeroes w_b WITHOUT renormalizing -- a different,
+    # deliberately non-renormalized ablation, not this fix).
+    assert math.isclose(sum(NORMALIZED_WEIGHTS.values()), 1.0, rel_tol=1e-9)
+    assert NORMALIZED_WEIGHTS["w_b"] == 0.0
+
+
+def test_normalized_weights_rescale_total_by_exactly_one_over_point_seven_five():
+    # Whenever i_blocking == 0 (the realistic case -- see
+    # test_blocking_impact_is_zero_when_physical_state_is_unchanged),
+    # normalizing is mathematically just dividing the default total by
+    # (1 - w_b) = 0.75, since the four live terms keep their relative
+    # proportions.
+    old_queue = ["C1", "C2", "C3", "C4", "C5"]
+    new_queue = ["C5", "C4", "C3", "C2", "C1"]
+    state = make_state(old_queue)
+    plan = Plan(plan_id="p", created_at=0, source="test", actions=[])
+    default = compute_impact(old_queue, new_queue, state, state, plan, k=5, conf_new=0.5, weights=DEFAULT_WEIGHTS)
+    normalized = compute_impact(old_queue, new_queue, state, state, plan, k=5, conf_new=0.5, weights=NORMALIZED_WEIGHTS)
+    assert default.i_blocking == 0.0
+    assert math.isclose(normalized.total, default.total / 0.75, rel_tol=1e-9)
 
 
 def test_is_action_affected_removed_container():

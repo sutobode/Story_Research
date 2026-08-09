@@ -18,9 +18,13 @@ class SanityReport:
     event_type_frequency: dict[str, float]
     mean_impact: float
     sc4_impact_reasonable: bool
+    trigger_rate: float
 
 
-def run_sanity_checks(instance: dict, seeds: tuple = tuple(range(10))) -> SanityReport:
+def run_sanity_checks(
+    instance: dict, seeds: tuple = tuple(range(10)),
+    weights: dict | None = None, theta_impact: float = 0.30,
+) -> SanityReport:
     """SC1-SC4 (spec 20, 49).
 
     SC1 measures the Static baseline (spec's own definition: does an
@@ -54,7 +58,7 @@ def run_sanity_checks(instance: dict, seeds: tuple = tuple(range(10))) -> Sanity
 
         for event in events:
             all_event_types[event.type] += 1
-            impact = compute_impact(local_queue, event.new_queue, state, state, plan, conf_new=event.confidence)
+            impact = compute_impact(local_queue, event.new_queue, state, state, plan, conf_new=event.confidence, weights=weights)
             all_impacts.append(impact.total)
 
             static_result = static_plan(plan)
@@ -73,6 +77,7 @@ def run_sanity_checks(instance: dict, seeds: tuple = tuple(range(10))) -> Sanity
     mean_impact = statistics.mean(all_impacts) if all_impacts else 0.0
     mean_dynamic_cost = statistics.mean(dynamic_costs) if dynamic_costs else 0.0
     solver_failure_rate = sum(solver_failure_flags) / len(solver_failure_flags) if solver_failure_flags else 0.0
+    trigger_rate = sum(1 for i in all_impacts if i >= theta_impact) / len(all_impacts) if all_impacts else 0.0
 
     return SanityReport(
         sc1_not_too_easy=mean_dynamic_cost > no_event_cost,
@@ -80,4 +85,5 @@ def run_sanity_checks(instance: dict, seeds: tuple = tuple(range(10))) -> Sanity
         event_type_frequency=frequency,
         mean_impact=mean_impact,
         sc4_impact_reasonable=0.2 <= mean_impact <= 0.8,
+        trigger_rate=trigger_rate,
     )
