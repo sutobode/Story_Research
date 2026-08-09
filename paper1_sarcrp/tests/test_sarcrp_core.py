@@ -173,6 +173,32 @@ def test_apply_fallback_margin_matches_original_spec9_behavior_with_zero_carry()
     assert decision2 == "KEEP"  # gain=0.2 <= tau=0.5
 
 
+def test_apply_fallback_margin_decay_can_flip_update_back_to_keep():
+    # R1.2: same numbers as test_apply_fallback_margin_updates_once_carried_
+    # plus_new_gain_clears_tau (raw_gain~0.51, carried_gain=0.514, tau=0.615,
+    # undecayed -> UPDATE), but with carried_gain_decay=0.1 the incoming
+    # carry shrinks to 0.0514 first: 0.51+0.0514=0.5614 <= tau -> KEEP.
+    decision, carried_next = _apply_fallback_margin(
+        j_old=61.49, j_best=60.98, tau=0.615, carried_gain=0.514, carried_gain_decay=0.1,
+    )
+    assert decision == "KEEP"
+    assert math.isclose(carried_next, 0.514 * 0.1 + (61.49 - 60.98), abs_tol=1e-2)
+
+
+def test_apply_fallback_margin_cap_bounds_the_incoming_carry():
+    # R1.2: an unbounded carry of 10.0 would force UPDATE on essentially any
+    # tau (10.0 + 0.51 = 10.51 > 0.615). carried_gain_cap=0.05 bounds how
+    # much of that carry can count this round, keeping the decision at KEEP.
+    uncapped_decision, _ = _apply_fallback_margin(j_old=61.49, j_best=60.98, tau=0.615, carried_gain=10.0)
+    assert uncapped_decision == "UPDATE"
+
+    capped_decision, capped_carried_next = _apply_fallback_margin(
+        j_old=61.49, j_best=60.98, tau=0.615, carried_gain=10.0, carried_gain_cap=0.05,
+    )
+    assert capped_decision == "KEEP"
+    assert capped_carried_next == 0.05  # incoming_carry capped at 0.05, then 0.05+0.51 re-capped at 0.05
+
+
 def test_replan_default_carried_gain_reproduces_original_behavior():
     # replan() without carried_gain/carried_gain_next must be indistinguishable
     # from before this feature existed -- Experiment 1/3/4 never pass it.
@@ -198,7 +224,7 @@ def test_replan_threads_carried_gain_into_the_fallback_margin_and_returns_its_re
     plan_old = make_plan()
     captured = {}
 
-    def spy_margin(j_old, j_best, tau, carried_gain):
+    def spy_margin(j_old, j_best, tau, carried_gain, carried_gain_cap=None, carried_gain_decay=1.0):
         captured["carried_gain_in"] = carried_gain
         return "UPDATE", 999.0  # a distinctive sentinel, otherwise unreachable
 

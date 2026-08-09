@@ -57,7 +57,10 @@ def _score_candidate(plan: Plan, plan_old: Plan, frozen_count: int, urgent_conta
     return compute_objective(op, stab, data)
 
 
-def _apply_fallback_margin(j_old: float, j_best: float, tau: float, carried_gain: float) -> tuple[str, float]:
+def _apply_fallback_margin(
+    j_old: float, j_best: float, tau: float, carried_gain: float,
+    carried_gain_cap: float | None = None, carried_gain_decay: float = 1.0,
+) -> tuple[str, float]:
     """Step 8 (spec 9's EstimatedGain > SwitchingCost + tau), extended with
     a carried-gain hysteresis motivated by the existence-proof report's
     Scenario C finding: the single-step margin is myopic, comparing only
@@ -75,14 +78,35 @@ def _apply_fallback_margin(j_old: float, j_best: float, tau: float, carried_gain
     carry untouched rather than eroding it.
 
     carried_gain=0.0 (replan()'s default) reproduces spec 9's original,
-    memoryless criterion exactly."""
+    memoryless criterion exactly.
+
+    R1.2 (reviewer critique): the mechanism above lets carried_gain
+    accumulate across arbitrarily many sub-margin rounds with no bound and
+    no decay -- carried_gain_cap and carried_gain_decay are opt-in
+    ablation hooks (default None/1.0 reproduce the validated mechanism
+    exactly, unused by every existing test/experiment) to check whether
+    Scenario E's real win survives a more conservative version: decay
+    shrinks the INCOMING carry (money owed from before) before adding
+    this round's fresh raw_gain, modeling that older foregone
+    opportunities should count for less; cap bounds how much carry can
+    ever be in flight at once, so no single round's carry-in can by
+    itself exceed a fixed budget. A round with no viable candidate
+    (raw_gain<=0) still leaves the existing carry untouched, same as the
+    default -- decay only fires on a round that itself found a genuine,
+    if sub-margin, improvement."""
     if j_best == float("inf"):
         return "KEEP", carried_gain
     raw_gain = j_old - j_best
     if raw_gain <= 0:
         return "KEEP", carried_gain
-    if raw_gain + carried_gain <= tau:
-        return "KEEP", carried_gain + raw_gain
+    incoming_carry = carried_gain * carried_gain_decay
+    if carried_gain_cap is not None:
+        incoming_carry = min(incoming_carry, carried_gain_cap)
+    if raw_gain + incoming_carry <= tau:
+        new_carry = incoming_carry + raw_gain
+        if carried_gain_cap is not None:
+            new_carry = min(new_carry, carried_gain_cap)
+        return "KEEP", new_carry
     return "UPDATE", 0.0
 
 
@@ -104,6 +128,8 @@ def replan(
     impact_weights: dict | None = None,
     solver=None,
     carried_gain: float = 0.0,
+    carried_gain_cap: float | None = None,
+    carried_gain_decay: float = 1.0,
 ) -> ReplanDecision:
     """Algorithm SAR-CRP v2 Core (spec 18), steps 1-9. use_local_search=False
     and impact_weights are ablation hooks (spec 25 A4, A6) -- not used by the
@@ -157,7 +183,9 @@ def replan(
 
     # Step 8: fallback check (extended with the carried-gain lookahead margin).
     tau = tau_frac * j_old if j_old not in (0.0, float("inf")) else 0.0
-    decision, carried_gain_next = _apply_fallback_margin(j_old, j_best, tau, carried_gain)
+    decision, carried_gain_next = _apply_fallback_margin(
+        j_old, j_best, tau, carried_gain, carried_gain_cap, carried_gain_decay,
+    )
     if decision == "KEEP":
         return ReplanDecision(decision="KEEP", plan=plan_old, impact=impact, j_old=j_old, j_new=j_best,
                                carried_gain_next=carried_gain_next)

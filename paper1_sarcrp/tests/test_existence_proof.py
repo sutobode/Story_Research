@@ -139,3 +139,34 @@ def test_scenario_e_statistically_powered_across_report_seeds():
     delta = cliffs_delta(lookahead_totals, myopic_totals)
     assert wr.p_value < 0.05
     assert delta < 0  # lookahead's totals are stochastically lower (better)
+
+
+def test_scenario_e_survives_moderate_decay_but_a_tight_cap_erases_the_win():
+    # R1.2 (reviewer critique): is Scenario E's 18/20 win an artifact of
+    # letting carried_gain accumulate with no bound and no decay? Full
+    # REPORT_SEEDS run (run_carried_gain_ablation.py, real, on the server):
+    #   default (cap=None, decay=1.0):        UPDATE@B=18/20, Cliff's delta=-0.9
+    #   decayed_half (cap=None, decay=0.5):    UPDATE@B=18/20, delta=-0.9 (IDENTICAL --
+    #     halving instance A's carried gain still leaves enough combined with
+    #     B's own gain to clear B's margin on the same 18 seeds)
+    #   capped_tight (cap=0.05, decay=1.0):    UPDATE@B=0/20, delta=0.0 (the win
+    #     vanishes entirely -- 0.05 is far below the real carried gain, ~0.21)
+    # Decay is NOT what makes the mechanism work here; an under-sized cap is
+    # what breaks it. A cap must be chosen with the real gain magnitude in
+    # mind, not treated as a free safety knob. This test re-verifies the same
+    # qualitative pattern on a 5-seed slice (not the full 20) to keep the
+    # suite's runtime bounded -- each run_scenario_e call solves two real
+    # 44/50-container instances end to end.
+    from sarcrp.seed_policy import REPORT_SEEDS
+    seeds = REPORT_SEEDS[:5]
+
+    default = [run_scenario_e(seed) for seed in seeds]
+    decayed = [run_scenario_e(seed, carried_gain_decay=0.5) for seed in seeds]
+    capped = [run_scenario_e(seed, carried_gain_cap=0.05) for seed in seeds]
+
+    updates_default = sum(r["lookahead_decision_b"] == "UPDATE" for r in default)
+    updates_decayed = sum(r["lookahead_decision_b"] == "UPDATE" for r in decayed)
+    updates_capped = sum(r["lookahead_decision_b"] == "UPDATE" for r in capped)
+    assert updates_default > 0  # non-degenerate on this slice
+    assert updates_default == updates_decayed  # decay alone changes nothing here
+    assert updates_capped == 0  # the tight cap suppresses every carry

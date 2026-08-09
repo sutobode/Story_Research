@@ -299,7 +299,7 @@ def run_lookahead_validation(seed: int, extra_steps: int = 10) -> dict:
     }
 
 
-def run_scenario_e(seed: int) -> dict:
+def run_scenario_e(seed: int, carried_gain_cap: float | None = None, carried_gain_decay: float = 1.0) -> dict:
     """Scenario E: a statistically-powered comparison, not a single
     anecdote. Chains two INDEPENDENT forced single-event opportunities
     (instance A: build_scale_scenario; instance B:
@@ -312,7 +312,13 @@ def run_scenario_e(seed: int) -> dict:
     (verified separately for both instances), so plain "sarcrp" must
     KEEP at both events on every seed; the question this answers is
     whether carrying A's foregone gain into B's decision is enough to
-    cross B's own margin, across many seeds rather than one."""
+    cross B's own margin, across many seeds rather than one.
+
+    carried_gain_cap/carried_gain_decay (both default to the validated
+    mechanism's exact behavior, None/1.0) are R1.2's ablation hooks -- see
+    run_carried_gain_ablation.py, which reruns this scenario under more
+    conservative capped/decayed variants to check whether the win above
+    is an artifact of the carry being allowed to accumulate unbounded."""
     state_a, old_queue_a, target_a = build_scale_scenario()
     plan_a = solve_crp(state_a, old_queue_a, time_limit_sec=5.0)
     new_queue_a = force_urgent_insertion(old_queue_a, target_a)
@@ -331,18 +337,20 @@ def run_scenario_e(seed: int) -> dict:
         # UPDATE does the realized cost equal j_new (=j_best, now adopted).
         return decision.j_old if decision.decision == "KEEP" else decision.j_new
 
-    def run_path(use_lookahead: bool) -> dict:
+    def run_path(use_lookahead: bool, carried_gain_cap: float | None = None, carried_gain_decay: float = 1.0) -> dict:
         rng = random.Random(seed)
         decision_a = replan(state_a, plan_a, old_queue_a, new_queue_a, urgent_a, rng=rng,
-                             conf_new=SCALE_EVENT_CONFIDENCE, time_limit_sec=5.0)
+                             conf_new=SCALE_EVENT_CONFIDENCE, time_limit_sec=5.0,
+                             carried_gain_cap=carried_gain_cap, carried_gain_decay=carried_gain_decay)
         carried = decision_a.carried_gain_next if use_lookahead else 0.0
         decision_b = replan(state_b, plan_b, old_queue_b, new_queue_b, urgent_b, rng=rng,
-                             conf_new=SCALE_EVENT_CONFIDENCE, time_limit_sec=5.0, carried_gain=carried)
+                             conf_new=SCALE_EVENT_CONFIDENCE, time_limit_sec=5.0, carried_gain=carried,
+                             carried_gain_cap=carried_gain_cap, carried_gain_decay=carried_gain_decay)
         total_cost = _realized_cost(decision_a) + _realized_cost(decision_b)
         return {"total_cost": total_cost, "decision_b": decision_b.decision}
 
-    myopic = run_path(use_lookahead=False)
-    lookahead = run_path(use_lookahead=True)
+    myopic = run_path(use_lookahead=False, carried_gain_cap=carried_gain_cap, carried_gain_decay=carried_gain_decay)
+    lookahead = run_path(use_lookahead=True, carried_gain_cap=carried_gain_cap, carried_gain_decay=carried_gain_decay)
     return {
         "seed": seed,
         "myopic_total": myopic["total_cost"],
