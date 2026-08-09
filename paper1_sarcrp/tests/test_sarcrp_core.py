@@ -173,6 +173,102 @@ def test_apply_fallback_margin_matches_original_spec9_behavior_with_zero_carry()
     assert decision2 == "KEEP"  # gain=0.2 <= tau=0.5
 
 
+def _run_gain_sequence(gains, tau, cap=None, decay=1.0):
+    """Drives _apply_fallback_margin through a sequence of positive raw
+    gains (j_old=g, j_best=0, so raw_gain=g exactly), tracking every
+    (decision, carry_after) pair -- used to check the formal properties
+    documented on _apply_fallback_margin against real numerical traces,
+    not just algebra on paper."""
+    carry = 0.0
+    trace = []
+    for g in gains:
+        decision, carry = _apply_fallback_margin(j_old=g, j_best=0.0, tau=tau, carried_gain=carry,
+                                                   carried_gain_cap=cap, carried_gain_decay=decay)
+        trace.append((decision, carry))
+    return trace
+
+
+def test_carried_gain_bounded_overshoot_property():
+    # Proposition 1 (bounded overshoot): whenever the mechanism updates,
+    # the cumulative sum of gains since the last update (S_t) satisfies
+    # tau < S_t <= tau + max_gain_in_that_epoch -- it never "overshoots"
+    # tau by more than the single largest gain in the triggering epoch.
+    rng = random.Random(0)
+    gains = [rng.uniform(0.01, 1.0) for _ in range(200)]
+    tau = 2.5
+    trace = _run_gain_sequence(gains, tau)
+
+    epoch_sum, epoch_max = 0.0, 0.0
+    for g, (decision, carry) in zip(gains, trace):
+        epoch_sum += g
+        epoch_max = max(epoch_max, g)
+        if decision == "UPDATE":
+            assert tau < epoch_sum <= tau + epoch_max + 1e-9
+            assert carry == 0.0  # resets on update
+            epoch_sum, epoch_max = 0.0, 0.0
+        else:
+            assert math.isclose(carry, epoch_sum, rel_tol=1e-9)
+            assert epoch_sum <= tau + 1e-9  # never keeps past tau -- soundness
+
+
+def test_carried_gain_timeliness_property_with_a_uniform_gain_floor():
+    # Proposition 2 (no indefinite postponement): if every gain in an
+    # epoch is >= epsilon, the mechanism must update within
+    # ceil(tau/epsilon) rounds of that epoch starting -- it cannot stall
+    # forever on a run of genuinely-positive gains.
+    tau, epsilon = 3.0, 0.4
+    max_rounds = math.ceil(tau / epsilon)
+    gains = [epsilon] * (max_rounds + 5)  # a few extra rounds past the guaranteed bound
+    trace = _run_gain_sequence(gains, tau)
+    first_update_round = next(i for i, (decision, _) in enumerate(trace) if decision == "UPDATE")
+    assert first_update_round < max_rounds
+
+
+def test_carried_gain_cap_below_tau_minus_max_gain_causes_permanent_keep():
+    # Proposition 4 (cap sufficiency condition): if cap C and every gain
+    # g satisfies g < tau - C, the mechanism can NEVER update via
+    # accumulation once saturated at C -- this is the formal explanation
+    # for R1.2's empirical finding (carried_gain_cap=0.05 erasing Scenario
+    # E's 18/20 win: tau~0.46-0.48, instance gains~0.21, and
+    # 0.05 < tau - 0.21 comfortably, so permanent KEEP is not a
+    # coincidence of those specific numbers -- it is guaranteed by this
+    # inequality for ANY instance satisfying it).
+    tau, cap, g = 0.4649, 0.05, 0.2119
+    assert cap < tau - g  # the sufficiency condition this test is checking
+    gains = [g] * 100
+    trace = _run_gain_sequence(gains, tau, cap=cap)
+    assert all(decision == "KEEP" for decision, _ in trace)
+    assert all(math.isclose(carry, cap, rel_tol=1e-9) for _, carry in trace[5:])  # saturates at the cap
+
+
+def test_carried_gain_decay_steady_state_below_tau_causes_permanent_keep():
+    # Proposition 5 (decay steady-state condition): under constant decay
+    # lambda<1 and constant gain g repeated indefinitely, the carry
+    # converges to the geometric-series limit g/(1-lambda). If that limit
+    # is <= tau, the mechanism never updates, no matter how many rounds
+    # elapse -- a decay-based dual of Proposition 4's cap condition.
+    tau, decay, g = 1.0, 0.5, 0.4
+    steady_state = g / (1 - decay)
+    assert steady_state <= tau  # the condition this test is checking (0.8 <= 1.0)
+    gains = [g] * 200
+    trace = _run_gain_sequence(gains, tau, decay=decay)
+    assert all(decision == "KEEP" for decision, _ in trace)
+    assert math.isclose(trace[-1][1], steady_state, rel_tol=1e-3)  # converged close to the predicted limit
+
+
+def test_carried_gain_decay_steady_state_above_tau_eventually_triggers():
+    # Converse of the above: if g/(1-lambda) > tau, the carry is
+    # monotonically increasing toward a limit that exceeds tau, so it
+    # MUST cross tau at some finite round -- decay alone cannot cause
+    # permanent KEEP when the steady state clears tau.
+    tau, decay, g = 1.0, 0.5, 0.6
+    steady_state = g / (1 - decay)
+    assert steady_state > tau  # the condition this test is checking (1.2 > 1.0)
+    gains = [g] * 200
+    trace = _run_gain_sequence(gains, tau, decay=decay)
+    assert any(decision == "UPDATE" for decision, _ in trace)
+
+
 def test_apply_fallback_margin_decay_can_flip_update_back_to_keep():
     # R1.2: same numbers as test_apply_fallback_margin_updates_once_carried_
     # plus_new_gain_clears_tau (raw_gain~0.51, carried_gain=0.514, tau=0.615,

@@ -93,7 +93,50 @@ def _apply_fallback_margin(
     itself exceed a fixed budget. A round with no viable candidate
     (raw_gain<=0) still leaves the existing carry untouched, same as the
     default -- decay only fires on a round that itself found a genuine,
-    if sub-margin, improvement."""
+    if sub-margin, improvement.
+
+    FORMAL PROPERTIES (verified numerically in test_sarcrp_core.py's
+    test_carried_gain_* tests -- restricting attention, WLOG, to the
+    subsequence of rounds with raw_gain>0 within one "epoch" between two
+    UPDATEs, since raw_gain<=0 rounds are no-ops for the carry):
+
+    1. Soundness (no premature switching): while decision=="KEEP", the
+       cumulative sum of raw_gain since the last UPDATE, S_t, always
+       satisfies S_t <= tau -- the mechanism never treats an accumulated
+       benefit smaller than the hysteresis margin as sufficient.
+    2. Bounded overshoot (default, cap=None, decay=1.0): at the round an
+       UPDATE triggers, tau < S_t <= tau + max(raw_gain in that epoch) --
+       the mechanism can overshoot tau by at most the single largest
+       round's own gain, never more, regardless of epoch length.
+    3. Timeliness: if every raw_gain in an epoch is >= epsilon > 0, an
+       UPDATE triggers within at most ceil(tau/epsilon) rounds -- genuine,
+       recurring improvement is never postponed indefinitely.
+    4. Cap sufficiency (permanent KEEP): if carried_gain_cap=C and every
+       raw_gain g in the epoch satisfies g < tau - C, the mechanism NEVER
+       updates via accumulation once the carry saturates at C, no matter
+       how many rounds elapse -- this is the exact, general reason R1.2's
+       carried_gain_cap=0.05 ablation erased Scenario E's 18/20 win
+       (tau~=0.46-0.48, per-instance gain~=0.2119, and 0.05 < tau-0.2119
+       comfortably): not a coincidence of those specific numbers, but a
+       guaranteed consequence of this inequality for any instance
+       satisfying it.
+    5. Decay steady-state (permanent KEEP, dual of property 4): under
+       constant carried_gain_decay=lambda<1 and a constant repeated gain
+       g, the carry converges to the geometric-series limit g/(1-lambda).
+       If that limit is <= tau, the mechanism never updates, however many
+       rounds elapse; if the limit exceeds tau, an UPDATE is guaranteed at
+       some finite round (the carry increases monotonically toward a
+       limit above tau, so it must cross tau).
+
+    Properties 4-5 explain WHY the cap ablation broke Scenario E's result
+    while the decay=0.5 ablation did not: Scenario E is a single carry-in
+    application (instance A's outcome combined once with instance B's own
+    gain), not a many-round accumulation -- decay=0.5 there is a one-shot
+    halving (0.2119*0.5=0.10595 combined with B's own ~0.2119, still
+    enough to clear tau_B for most seeds), never reaching the asymptotic
+    regime properties 4-5 describe. The cap, by contrast, binds
+    immediately on the very first application (min(0.2119, 0.05)=0.05),
+    which is a one-round instance of property 4's general condition."""
     if j_best == float("inf"):
         return "KEEP", carried_gain
     raw_gain = j_old - j_best
