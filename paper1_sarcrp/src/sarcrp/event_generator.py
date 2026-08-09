@@ -15,7 +15,33 @@ EVENT_TYPE_WEIGHTS = {
     "PROBABILITY_UPDATE": 0.10,
     "STALE_INFORMATION": 0.05,
 }
-P_EVENT = 0.30
+
+# Calibration (Q1 reviewer critique on practical significance): P_EVENT was
+# a single flat 0.30 for every uncertainty_level -- "low/medium/high" only
+# changed event MAGNITUDE (severity, confidence) once an event occurred,
+# never how OFTEN one occurred at all, which is not a realistic model of
+# what "uncertainty level" should mean operationally.
+#
+# P_EVENT_BY_UNCERTAINTY["low"]=0.078 is a REAL, cited anchor: Port of
+# Casablanca, under an optimized truck appointment system (TAS), had 7.8%
+# of truck arrivals rescheduled from their preferred appointment time
+# ("A Novel Truck Appointment System for Container Terminals", MDPI
+# Sustainability 17(13):5740, 2025, real operational data). This is a
+# best-case/optimized-TAS disruption rate, so it anchors "low" uncertainty,
+# not an average case.
+#
+# "medium"/"high" are NOT independently cited -- no descriptive statistic
+# for a "medium" or "high"-disruption terminal (e.g. no TAS, or a
+# congested/less-optimized one) was found in the accessible literature.
+# They are a reasoned scaling of the one real anchor (2.5x, 4.5x), kept
+# deliberately explicit and separate from the "low" anchor so a future
+# revision can replace them with real data without re-deriving anything.
+P_EVENT_BY_UNCERTAINTY = {
+    "low": 0.078,     # real: Port of Casablanca, optimized TAS (cited above)
+    "medium": 0.195,  # assumption: 2.5x the real low-uncertainty anchor
+    "high": 0.351,    # assumption: 4.5x the real low-uncertainty anchor
+}
+P_EVENT = 0.30  # unchanged, original flat default -- every existing experiment/test keeps using this exact value
 
 
 def _sample_severity(uncertainty_level: str, rng: random.Random) -> str:
@@ -78,12 +104,19 @@ def generate_event_stream(
     rng: random.Random,
     event_id_prefix: str = "e",
     fixed_confidence: float | None = None,
+    calibrated: bool = False,
 ) -> list[Event]:
+    """calibrated=False (default) reproduces every existing experiment's
+    exact numbers via the original flat P_EVENT=0.30. calibrated=True uses
+    P_EVENT_BY_UNCERTAINTY instead, so event frequency (not just magnitude)
+    depends on uncertainty_level, anchored to a real cited disruption rate
+    (see P_EVENT_BY_UNCERTAINTY's docstring above)."""
     queue = list(initial_queue)
     events: list[Event] = []
+    p_event = P_EVENT_BY_UNCERTAINTY[uncertainty_level] if calibrated else P_EVENT
 
     for t in range(1, t_steps + 1):
-        if rng.random() > P_EVENT:
+        if rng.random() > p_event:
             continue
 
         sampled = _sample_event_type(rng)

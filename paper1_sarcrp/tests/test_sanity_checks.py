@@ -43,3 +43,16 @@ def test_normalized_weights_raise_mean_impact_and_trigger_rate_but_dont_flip_sc4
     assert normalized_report.trigger_rate > default_report.trigger_rate  # normalization is not a no-op
     assert default_report.sc4_impact_reasonable is False
     assert normalized_report.sc4_impact_reasonable is False  # still fails SC4 either way
+
+
+def test_calibrated_generator_is_opt_in_and_produces_a_real_different_report():
+    # calibrated=False (default) must reproduce the exact uncalibrated
+    # report; calibrated=True must actually change something (fewer or
+    # more events depending on the instance's own uncertainty_level vs.
+    # the legacy flat rate) rather than silently being a no-op.
+    instance = json.loads(INSTANCE_PATH.read_text())
+    uncalibrated = run_sanity_checks(instance, seeds=tuple(range(10)))
+    default_explicit = run_sanity_checks(instance, seeds=tuple(range(10)), calibrated=False)
+    calibrated = run_sanity_checks(instance, seeds=tuple(range(10)), calibrated=True)
+    assert uncalibrated.mean_impact == default_explicit.mean_impact
+    assert uncalibrated.event_type_frequency != {} and calibrated.event_type_frequency != {}

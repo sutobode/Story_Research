@@ -23,7 +23,7 @@ class SanityReport:
 
 def run_sanity_checks(
     instance: dict, seeds: tuple = tuple(range(10)),
-    weights: dict | None = None, theta_impact: float = 0.30,
+    weights: dict | None = None, theta_impact: float = 0.30, calibrated: bool = False,
 ) -> SanityReport:
     """SC1-SC4 (spec 20, 49).
 
@@ -53,7 +53,7 @@ def run_sanity_checks(
         rng = random.Random(seed)
         state = _build_state(instance, queue)
         plan = solve_crp(state, queue, time_limit_sec=5.0)
-        events = generate_event_stream(queue, instance["t_steps"], instance["uncertainty_level"], rng)
+        events = generate_event_stream(queue, instance["t_steps"], instance["uncertainty_level"], rng, calibrated=calibrated)
         local_queue = list(queue)
 
         for event in events:
