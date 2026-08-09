@@ -9,6 +9,44 @@
 \begin{document}
 \maketitle
 
+\begin{abstract}
+We study when and how much of an existing container relocation plan
+should be replanned as retrieval information changes, given a bounded
+switching cost. SAR-CRP v2 combines an estimated-impact trigger, a freeze
+horizon, a local-search repair step, and a stability-aware objective with
+a fallback margin; a carried-gain lookahead extension threads foregone
+sub-margin improvements across rounds. We evaluate the full
+baseline/ablation suite (6 replanning policies, 6 ablations) under a
+pre-registered statistical protocol ($\geq$20 seeds, Wilcoxon signed-rank,
+Holm-Bonferroni, effect sizes), across three yard layouts, against a real,
+independently-validated CRP reinforcement-learning solver (Shin et al.\
+2026), and on real literature benchmark instances (Lee et al.). On the
+natural random-event benchmark, SAR-CRP ties the never-replan baseline
+because its own impact trigger rarely fires (mean impact 0.09--0.12
+depending on weight normalization, against a 0.30 threshold) -- not a
+benchmark artifact, but the trigger functioning as specified on
+genuinely low-impact event streams. A deliberately constructed
+existence-proof experiment isolates and confirms every pipeline stage
+end-to-end, finds a real improving candidate at industrial scale (50
+containers) that lands just under the fallback margin, and shows that a
+carried-gain lookahead margin recovers that foregone gain with real
+statistical power (18/20 seeds, Wilcoxon $p=2.2\times10^{-5}$, Cliff's
+$\delta=-0.9$) when a genuine second opportunity is constructed to
+exist -- a result that a further generalization sweep shows depends on
+finding two instances with comparably-sized sub-margin gains, not on any
+two sub-margin instances. Eight real implementation bugs were caught and
+fixed directly from the suite's own output and are disclosed rather than
+silently corrected. No directly competing named replanning-policy
+baseline was found in the CRP-specific literature; we position the
+contribution against the closest available theory (rolling-horizon
+schedule freezing, smoothed online optimization's switching-cost
+tradeoff, event-triggered control) instead. The demonstrated
+contribution is therefore scoped: a correct, statistically validated
+mechanism with a real, conditional benefit, not a demonstrated general
+win over standard replanning policies on naturally-arising event
+streams.
+\end{abstract}
+
 \section{Setup}
 
 \textbf{Hardware.} All computation ran on the remote CPU server
@@ -725,18 +763,25 @@ CRP-solving heuristics on a different comparison axis than B1--B5's
 replanning-policy spectrum, for the same reason CRP\_RL
 (\S\ref{sec:real-solver}) sits at the solver layer, not the policy layer.
 
-\textbf{Summary of the positioning claim.} No published policy was found
-that directly competes with SAR-CRP's specific combination (estimated
-impact trigger + freeze horizon + stability-aware local-search repair +
-lookahead fallback margin) on the CRP replanning problem as defined here.
-B1--B5 instantiate the standard alternative-policy spectrum this
-literature family uses when no single named competitor exists (never
-update, always update, periodic, event-triggered without a stability
-term, MPC-style receding horizon); CRP\_RL (\S\ref{sec:real-solver})
-provides the solver-layer SOTA comparison; Sridharan et al.\ (1987) and
-Goel and Wierman (2018) ground the freeze-horizon and switching-cost
-mechanisms in established, non-CRP-specific theory rather than presenting
-them as invented from nothing.
+\textbf{The gap this positioning identifies, stated directly.} Rolling-horizon
+freezing (Sridharan et al.\ 1987) and switching-cost-aware online
+optimization (Goel and Wierman 2018) each supply one half of SAR-CRP's
+decision rule -- when to freeze, and when a switch is worth its cost --
+but neither literature instantiates either mechanism for the CRP, and
+neither combines the two with an estimated, checkable impact trigger
+before deciding whether to freeze or switch at all. The CRP-specific
+literature (Zhou and Zhang 2024, and the further block-relocation
+literature it surveys) optimizes solution quality \emph{within} a
+retrieval round, not the decision of whether/how much to replan
+\emph{across} rounds as information changes. \textbf{That is the
+specific gap this report's contribution fills: a checkable
+impact-trigger + freeze-horizon + stability-aware-repair + lookahead-margin
+policy for the CRP, instantiating rolling-horizon freezing and
+switching-cost online optimization in a domain neither was built for},
+evaluated against the standard alternative-policy spectrum (B1--B5) this
+literature family uses when no single named competitor exists, plus a
+solver-layer SOTA comparison (CRP\_RL, \S\ref{sec:real-solver}) -- not a
+claim that a directly competing named policy was found and beaten.
 
 \section{External Validity: Real Literature Benchmarks}
 \label{sec:lee-shin}
