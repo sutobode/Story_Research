@@ -48,9 +48,15 @@ real implementation defects found during this work are disclosed, including
 three that invalidate earlier results in this same report: a $\lambda$
 factorial that never varied anything, two of six ablations that silently
 ablated nothing, and a wall-clock search budget that made published numbers
-depend on machine load. The findings are not CRP-specific: any replanning
-method combining a bounded benefit term with a relative switching threshold
-inherits the same dead zones.
+depend on machine load. DZ1 is an instance of a documented, general pathology
+of the weighted-sum method -- incommensurate units in a weighted sum bias
+which tradeoffs are reachable regardless of weight, here in the direction
+of suppressing rather than dominating a term \cite{marler2010} -- and DZ2's
+mixed-threshold fix follows the same architecture event-triggered control
+already uses for a related (though not identical-direction) scale-dependent
+failure of purely relative thresholds \cite{yaqoob2022}. We verify both
+failure modes concretely in this project's own objective rather than
+asserting they recur in any specific prior replanning method.
 
 The remainder of this abstract describes the pipeline and evaluation that
 produced these findings, whose contributions we separate because they carry
@@ -1144,6 +1150,22 @@ otherwise sound, even by its own metric.
 \section{Related Work and Positioning}
 \label{sec:related-work}
 
+\textbf{DZ1's general form is a documented pathology of the weighted-sum
+method, not a claim invented for this report.} Marler and
+Arora~\cite{marler2010}, in one of the most-cited analyses of the weighted
+sum method (1590+ citations as of this writing), state that objective
+scales must be commensurate, since combining quantities in different units
+biases which tradeoffs are reachable regardless of the weight assigned;
+without consistent normalization, a term on a different scale is either
+suppressed or dominates. DZ1 is that same mechanism, verified concretely in
+this project's own objective, where a normalized $[0,1]$ delay term is
+structurally suppressed by an unbounded relocation count. We make no claim
+that any specific prior CRP or replanning paper's objective exhibits this
+particular instance -- we did not audit one -- only that the general
+failure mode is independently documented and this report demonstrates it
+concretely, with a theorem and a decisive 16-instance sweep, rather than by
+citation alone.
+
 SAR-CRP's contribution is a \emph{replanning policy} -- deciding whether,
 when, and how much of an existing plan to touch as retrieval information
 changes -- layered on top of a CRP solver, not a new CRP solver itself.
@@ -1567,14 +1589,26 @@ feasibility from 0/16 instances to 14/16 with gains two orders of magnitude
 larger. \textbf{This reframes the paper: the contribution is a proven
 structural diagnosis of a whole class of stability-aware replanning
 objectives, plus two principled fixes, rather than a method that
-outperforms baselines.} It also generalizes past the CRP --- rolling-horizon
-scheduling, MPC with switching costs, and event-triggered control applied to
-combinatorial problems all combine a bounded benefit term with a relative
-threshold, and inherit the same dead zones. Along the way this
-investigation twice drew a confident conclusion from a single instance and
-twice had to retract it after a systematic sweep; both retractions are
-recorded above rather than quietly corrected, because they are the clearest
-evidence for the methodological point the report argues.
+outperforms baselines.} We do not claim rolling-horizon scheduling, MPC
+with switching costs, or event-triggered control applied elsewhere
+\emph{already} exhibit DZ1/DZ2 --- we have not audited any specific prior
+method's objective and make no such claim about this report's own cited
+prior work. What generalizes is narrower and independently supported: DZ1
+is a concrete instance of a documented general pathology of the
+weighted-sum method, where incommensurate units bias which tradeoffs are
+reachable regardless of weight \cite{marler2010}; and DZ2's mixed-threshold
+fix is the same architecture event-triggered control uses for a related
+scale-dependent failure of purely relative thresholds, though that
+literature's motivating failure runs in the opposite direction (a relative
+threshold vanishing near equilibrium, not growing unboundedly with scale)
+\cite{yaqoob2022}. Any method combining a normalized, bounded benefit term
+with an unbounded cost term and a purely relative switching threshold is a
+plausible candidate for the same failure, but demonstrating that is future
+work, not a claim made here. Along the way this investigation twice drew a
+confident conclusion from a single instance and twice had to retract it
+after a systematic sweep; both retractions are recorded above rather than
+quietly corrected, because they are the clearest evidence for the
+methodological point the report argues.
 
 \textbf{Stated plainly, as two separate contributions carrying two
 different kinds of evidence.} The trigger+freeze+repair+stability
@@ -1622,6 +1656,12 @@ Z.~Zhang, K.~C.~Tan, W.~Qin, Y.~Li, E.~P.~Chew, and K.~Xu, ``A
 Data-Driven Approach to Solving the Container Relocation Problem with
 Uncertainties,'' \emph{Advanced Engineering Informatics}, vol.~65,
 art.~103112, 2025. \url{https://doi.org/10.1016/j.aei.2025.103112}
+
+\bibitem{marler2010}
+R.~T.~Marler and J.~S.~Arora, ``The weighted sum method for
+multi-objective optimization: new insights,'' \emph{Structural and
+Multidisciplinary Optimization}, vol.~41, pp.~853--862, 2010.
+\url{https://doi.org/10.1007/s00158-009-0460-7}
 
 \bibitem{sridharan1987}
 S.~V.~Sridharan, W.~L.~Berry, and V.~Udayabhanu, ``Freezing the Master
