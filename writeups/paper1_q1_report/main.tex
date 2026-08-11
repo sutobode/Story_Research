@@ -12,10 +12,49 @@
 \maketitle
 
 \begin{abstract}
-We study when and how much of an existing container relocation plan
-should be replanned as retrieval information changes, given a bounded
-switching cost. This report makes two distinct contributions, deliberately
-separated because they carry different kinds and strengths of evidence.
+We study when and how much of an existing container relocation plan should
+be replanned as retrieval information changes, given a bounded switching
+cost. \textbf{Our central result is a diagnosis rather than an algorithm:
+we prove that the standard way of writing such an objective contains two
+dead zones in which stability-aware replanning cannot act at all, identify
+exactly where they lie, and fix them.} The first is a dimensional
+inconsistency --- a relocation \emph{count} is added to a dimensionless
+\emph{normalized} delay ratio, capping the delay term's entire contribution
+at its weight $\beta$ and hence permanently below the per-relocation cost
+$\alpha$, so expediting an urgent container can never pay for even one
+relocation at any instance size. The second is a purely \emph{relative}
+switching margin $\tau = \tau_{\text{frac}} J_{old}$, which outgrows that
+constant cap beyond the exactly computable scale
+$J_{old} = \beta/\tau_{\text{frac}} = 50$. Together they explain a
+null result we could not otherwise account for: across 190 generated events
+we observe \emph{zero} positive repair gain even with the trigger disabled
+and all switching costs removed, and the proposed method is numerically
+identical to never replanning in all 3240 episodes of the main factorial
+experiment. Both dead zones are stated as theorems and verified
+numerically. We then fix them --- the margin with the mixed
+relative-absolute form standard in event-triggered control, whose absolute
+ceiling we \emph{derive} from the objective's own achievable-gain bound
+rather than tune (results are identical across a $3\times$ range of the
+derivation's one free parameter), and the delay term by measuring it in
+crane actions so that its weight ratio becomes an interpretable
+service-versus-throughput policy choice. On 16 instances spanning 9--84
+containers, repairs become possible on 14 of 16 once the dimensional fix is
+applied versus 0 of 16 as originally specified, with realized gains rising
+from $\approx0.21$ to $1.70$--$41.59$; a dead-zone-aware prediction rule
+matches 58 of 64 configurations, and all six exceptions are attributed
+(two to an integer relocation-count channel outside the delay bound's
+scope, four to local-search capability rather than to a dead zone). Eleven
+real implementation defects found during this work are disclosed, including
+three that invalidate earlier results in this same report: a $\lambda$
+factorial that never varied anything, two of six ablations that silently
+ablated nothing, and a wall-clock search budget that made published numbers
+depend on machine load. The findings are not CRP-specific: any replanning
+method combining a bounded benefit term with a relative switching threshold
+inherits the same dead zones.
+
+The remainder of this abstract describes the pipeline and evaluation that
+produced these findings, whose contributions we separate because they carry
+different kinds and strengths of evidence.
 \textbf{First}, an infrastructure contribution: SAR-CRP v2 combines an
 estimated-impact trigger, a freeze horizon, a local-search repair step,
 and a stability-aware objective, specified and validated end-to-end
@@ -248,13 +287,22 @@ B6 SAR-CRP Core & Proposed method: trigger + freeze horizon + local-search repai
 \hline
 A1 No Trigger & Always replan (removes the impact threshold) \\
 A2 No Freeze Horizon & Allow the repair to touch the entire plan \\
-A3 No Stability Cost & Optimize operational cost only ($\lambda=0$) \\
+A3 No Stability Cost & Optimize operational cost only ($\lambda=0$) --- \textbf{was a no-op, see caption} \\
 A4 No Local Search & Minimal feasibility repair or full reoptimization only \\
-A5 No Data Confidence Penalty & Ignore state confidence in the objective \\
-A6 No Blocking Impact & Impact estimate excludes $I_{blocking}$ \\
+A5 No Data Confidence Penalty & Ignore state confidence ($\mu=0$) --- \textbf{was a no-op, see caption} \\
+A6 No Blocking Impact & Impact estimate excludes $I_{blocking}$ --- \textbf{structural no-op, see caption} \\
 \hline
 \end{tabular}
-\caption{B1--B6 (spec \S22, \S40) and A1--A6 (spec \S25), as implemented in \texttt{sarcrp.baselines} and \texttt{sarcrp.ablations}.}
+\caption{B1--B6 (spec \S22, \S40) and A1--A6 (spec \S25), as implemented in
+\texttt{sarcrp.baselines} and \texttt{sarcrp.ablations}.
+\textbf{Correction (\S\ref{sec:limitations}): three of the six ablations did
+not, in fact, ablate anything.} A3 and A5 were silent no-ops because
+$\lambda$ and $\mu$ were accepted by \texttt{replan}'s signature but never
+reached the candidate-scoring function (bug \#10) --- both are now threaded
+through, but every A3/A5 result previously reported in this report measured
+\emph{no change at all}. A6 is a separate, structural no-op:
+$I_{blocking}$ is identically zero throughout Paper 1's scope, so removing
+its weight changes nothing. Only A1, A2, and A4 were genuine ablations.}
 \label{tab:baselines}
 \end{table}
 
@@ -456,13 +504,23 @@ inside \texttt{event\_generator}'s own high-uncertainty confidence range,
 This time a \emph{real, positive} improving candidate is found on every one
 of the 20 seeds (mean gain 0.489, max 0.514) --- but it falls just under
 spec \S9's own fallback margin, $\tau = 0.01 \times J(P_{old}) = 0.615$, on
-every single seed. This is the precise, well-characterized boundary this
-suite's random benchmark never got close enough to observe: the full
-pipeline (impact estimator, trigger, C0--C3 candidate generation, local
-search, fallback margin) all function end-to-end exactly as spec \S9/\S18
-describe, and the one parameter standing between KEEP and UPDATE here is
-the 1\%-of-$J_{old}$ fallback margin --- a deliberately conservative
-guard against low-value churn, not a defect.
+every single seed. The full pipeline (impact estimator, trigger, C0--C3
+candidate generation, local search, fallback margin) does function
+end-to-end exactly as spec \S9/\S18 describe.
+
+\textbf{Retraction of this scenario's original interpretation.} This gap
+was presented here as ``the precise, well-characterized boundary this
+suite's random benchmark never got close enough to observe'' --- an
+empirical discovery. \S\ref{sec:dead-zones} shows it is nothing of the
+kind: with $J_{old} = 61.49$ past the crossover
+$\beta/\tau_{\text{frac}} = 50$, Eq.~\ref{eq:dz2} makes a delay-driven
+\texttt{UPDATE} \emph{impossible whatever the search finds}, and the
+observed gain (0.489--0.514) simply sits at Eq.~\ref{eq:dz1}'s $\beta$
+ceiling (predicted 0.4839 --- a 1\% match). The entire result was
+computable in advance from $\alpha$, $\beta$, and $\tau_{\text{frac}}$.
+Nor is the margin merely ``a deliberately conservative guard'': its
+\emph{relative form} is one of the two structural defects
+\S\ref{sec:dead-zones} identifies and repairs.
 
 \textbf{After these fixes, Experiment 1/3/4's already-reported numbers were
 re-verified by re-running all three}: identical to the numbers in this
@@ -732,6 +790,134 @@ sub-margin gains are close in magnitude to a shared decision's $\tau$, not
 merely on finding any two instances that individually show a real,
 positive, sub-margin gain -- a narrower, now explicitly characterized
 condition, identified by a blind sweep rather than assumed.
+
+\section{Two Provable Dead Zones in the Objective's Parameterization}
+\label{sec:dead-zones}
+
+Everything above documents a mechanism that works when handed a
+deliberately constructed opportunity, and ties Static everywhere else. The
+obvious question -- \emph{why} does the trigger essentially never find a
+worthwhile repair on any naturally generated event? -- turns out to have an
+exact, provable answer that no amount of parameter sweeping would have
+revealed, and it reframes this paper's contribution. A diagnostic run
+across all 20 \texttt{REPORT\_SEEDS} found \textbf{0 of 190 events with any
+positive repair gain even at $\theta_{\text{impact}}=0$ and
+$\lambda=\mu=0$} -- that is, with the trigger disabled and every switching
+cost removed. The cause is not calibration. It is the objective's own
+parameterization, and it produces two distinct dead zones.
+
+\textbf{Dead Zone 1 (DZ1) -- a dimensional inconsistency, independent of
+scale.} Eq.~\ref{eq:opcost} adds $\alpha R(P)$, a \emph{count} of crane
+actions, to $\beta \cdot \mathrm{RetrievalDelayNorm}(P)$, a
+\emph{dimensionless ratio} in $[0,1]$. Because that ratio is capped at 1,
+the delay term's entire possible contribution is capped at $\beta$:
+\begin{equation}
+g_{\max}^{\text{norm}}(L) \;=\; \beta\frac{L-1}{L+1} \;<\; \beta \;=\; 0.5
+\qquad\text{for every plan length } L .
+\label{eq:dz1}
+\end{equation}
+One relocation costs $\alpha = 1.0$. Since $g_{\max}^{\text{norm}} < \beta
+< \alpha$, \textbf{expediting an urgent container can never pay for even a
+single extra relocation, at any instance size} -- and expediting a buried
+container generally requires at least one. This is why the diagnostic
+found exactly zero gain: the objective structurally forbids the very
+tradeoff the mechanism exists to make.
+
+\textbf{Dead Zone 2 (DZ2) -- a scale-dependent margin.} The fallback
+margin $\tau = \tau_{\text{frac}} J_{old}$ is purely \emph{relative}, so it
+grows with instance size, while Eq.~\ref{eq:dz1}'s bound does not.
+A delay-driven \texttt{UPDATE} therefore requires
+$\beta > \tau_{\text{frac}} J_{old}$, i.e.
+\begin{equation}
+J_{old} \;<\; \beta/\tau_{\text{frac}} \;=\; 0.5/0.01 \;=\; 50 .
+\label{eq:dz2}
+\end{equation}
+Beyond that, no delay-driven repair can clear the margin \emph{whatever the
+search finds}. \textbf{This retracts an empirical claim made earlier in
+this report:} Scenario B's ``real gain (0.51) that lands just under spec's
+own 1\% margin ($\tau = 0.615$)'' was presented as a precise boundary
+discovered by experiment. With $J_{old} = 61.49 > 50$, Eq.~\ref{eq:dz2}
+shows it was an \emph{arithmetic certainty} computable in advance -- the
+observed gain 0.4886--0.51 simply sits at Eq.~\ref{eq:dz1}'s $\beta$
+ceiling (predicted 0.4839, a 1\% match). Both dead zones are stated as
+theorems and verified numerically in
+\texttt{tests/test\_objective\_dead\_zones.py}.
+
+\subsection{Two fixes, and which one actually matters}
+
+DZ2's fix is the \emph{mixed relative-absolute threshold} standard in
+event-triggered control (\S\ref{sec:related-work}'s cited survey):
+$\tau = \min(\tau_{\text{frac}} J_{old},\, \tau_{\text{abs}})$. Critically,
+$\tau_{\text{abs}}$ is \emph{derived} from Eq.~\ref{eq:dz1}'s own bound
+rather than tuned: $\tau_{\text{abs}} = \kappa\beta$ requires a repair to
+capture at least a fraction $\kappa$ of the achievable benefit
+(\texttt{objective.derive\_tau\_abs}, $\kappa=0.5$). The result is
+insensitive to $\kappa$ -- $\kappa \in \{0.25, 0.5, 0.75\}$ all give an
+identical 19/20 update rate where the relative form gives 0/20 -- because
+\emph{any} ceiling below the achievable gain unblocks the decision equally.
+What fails is the unbounded relative \emph{form}, not a particular constant.
+
+DZ1's fix removes the dimensional inconsistency: measure delay in crane
+actions (\texttt{objective.retrieval\_delay\_actions}), so
+$g_{\max}^{\text{act}}(L) = \beta(L-1)$ grows with the instance and
+$\beta/\alpha$ becomes an interpretable service-level-versus-throughput
+ratio -- a terminal policy choice this work \emph{characterizes} rather
+than prescribes, since no operational calibration data is claimed here.
+
+\begin{table}[h]
+\centering
+\small
+\begin{tabular}{lcc}
+\hline
+ & margin relative & margin mixed \\
+\hline
+delay normalized (as specified) & \textbf{0/16} & \textbf{2/16} \\
+delay action-scaled (DZ1 fix)   & \textbf{14/16} & \textbf{14/16} \\
+\hline
+\end{tabular}
+\caption{The $2\times2$ design space: instances (of 16, spanning 9--84
+containers) where at least one seed produced an \texttt{UPDATE}.
+\textbf{DZ1 is the dominant dead zone; DZ2 is secondary.} Source:
+\texttt{run\_dead\_zone\_scale\_sweep.py},
+\texttt{results/dead\_zone\_scale\_sweep.csv}, deterministic budget.}
+\label{tab:dead-zone-2x2}
+\end{table}
+
+\textbf{The decisive experiment, and a second self-correction.}
+Table~\ref{tab:dead-zone-2x2} sweeps 16 distinct instances built with the
+same deterministic recipe as the existence-proof instances, spanning 9--84
+containers, across both fixes ($5$ seeds each, deterministic budget). Fixing
+DZ2 alone rescues 2 of 16 instances; fixing DZ1 alone rescues 14 of 16.
+\textbf{This corrects an emphasis made earlier in this very investigation:}
+the mixed threshold was initially identified as ``the'' fix on the strength
+of a single instance (10$\times$5, 50 containers) -- which the sweep reveals
+to be one of only \emph{two} instances where DZ2 is the binding constraint.
+Trusting that one instance would have produced a confidently wrong
+conclusion; the systematic sweep is what caught it. That is the same
+$n{=}1$ hazard this report criticizes elsewhere, encountered and corrected
+in its own analysis.
+
+Realized gains under the DZ1 fix are \textbf{1.70--41.59}, two orders of
+magnitude above the 0.21 that \S\ref{sec:lookahead}'s result rested on, and
+they \emph{vary genuinely across instances} rather than repeating one
+identical value -- so the replication unit here is 16 real instances, not
+one constructed pair.
+
+\textbf{Prediction accuracy, with every exception accounted for.} A
+DZ1-aware rule (an \texttt{UPDATE} is possible only if $g_{\max} > \tau$
+\emph{and} $g_{\max} > \alpha$) matches 58/64 configurations (90.6\%). The
+six exceptions are explained rather than set aside. Two (10$\times$5,
+11$\times$5 under normalized delay + mixed margin) show gains
+\emph{exceeding} $g_{\max}$ (0.5143 vs 0.491), because those repairs reduced
+the \emph{relocation count} -- an integer-step channel outside the
+delay-only bound's scope, so the bound is correct but not exhaustive. Four
+(10$\times$7 at 70 containers and 14$\times$6 at 84, under both margins)
+show zero gain despite $g_{\max} = 86$--$92$ against $\tau \approx 1.9$:
+here the theory permits an update and the local search simply fails to find
+one within its iteration budget. That is a \emph{search capability} limit,
+categorically different from a dead zone, and it is reported as such --
+note that 12$\times$6 at 72 containers succeeds with a gain of 41.59, so the
+failure is not monotone in instance size.
 
 \section{Experiment 3: Cross-Layout}
 
@@ -1123,6 +1309,49 @@ fix, git commit \texttt{2617a50}).
 \label{sec:limitations}
 
 \begin{itemize}
+  \item \textbf{Three further real bugs (\#9--\#11) were found by
+    self-review after the first eight, and two of them invalidate results
+    reported earlier in this document.} They are listed first because they
+    bound what the rest of this report can be trusted to show.
+    \textbf{(\#9)} \texttt{simulator.py} scored every episode at
+    \texttt{compute\_objective}'s $\lambda=1.0$ default regardless of the
+    grid's $\lambda$, so \textbf{Experiment 1's $\lambda$ factorial never
+    affected any reported number} --- verified directly from
+    \texttt{experiment1\_results.csv}, where all 27
+    (uncertainty, freeze\_size, $\lambda$) cells are byte-identical across
+    $\lambda \in \{0, 0.5, 1.0\}$. The same holds for \texttt{freeze\_size},
+    which only ever reached \texttt{sarcrp} and
+    \texttt{event\_triggered\_no\_stability} (never MPC, whose defining
+    parameter it is). Experiment 1 should therefore be read as a
+    \emph{3-condition} experiment (uncertainty level) replicated nine-fold,
+    not a $3\times3\times3$ factorial. \textbf{(\#10)} $\lambda$ and $\mu$
+    were accepted by \texttt{replan}'s signature but never reached
+    \texttt{\_score\_candidate} or \texttt{local\_search\_repair.\_score},
+    so SAR-CRP's stability and data-confidence weights were inert ---
+    which is why ablations A3 and A5 were no-ops
+    (Table~\ref{tab:baselines}). \textbf{(\#11)} A wall-clock cutoff made
+    results machine- and load-dependent: the local-search walk completes in
+    4.10s of the former 5.0s budget (82\%), so a $\sim$20\% slower or
+    busier machine truncates it, the repair gain collapses from 0.211917 to
+    exactly 0.0, and the decision flips. The same Scenario E run yields
+    18/20 updates on an idle machine and 13/20 under load, with identical
+    code and seeds. All experiments now use the deterministic
+    iteration-count budget; because the untruncated walk already fit the old
+    budget, the reported numbers are unchanged but are now reproducible on
+    any machine. \textbf{A reviewer re-running the previous code on
+    different hardware would have obtained different numbers.}
+  \item \textbf{The central negative result has a provable cause, and it
+    supersedes this report's original framing} (\S\ref{sec:dead-zones}).
+    Two dead zones --- a dimensional inconsistency capping delay-driven
+    gain at $\beta < \alpha$ (DZ1), and a relative margin that outgrows
+    that cap past $J_{old} = 50$ (DZ2) --- make delay-driven replanning
+    impossible by construction, not merely rare. This retracts
+    Scenario B's presentation of its gain/margin gap as an empirical
+    discovery (it is computable in advance) and demotes
+    \S\ref{sec:lookahead}'s carried-gain mechanism from ``the
+    contribution'' to a workaround for a mis-specified margin. The
+    $2\times2$ sweep further shows DZ1, not DZ2, is dominant --- correcting
+    an emphasis this investigation itself had drawn from a single instance.
   \item \textbf{Experiment 5} (operator-acceptance study) is intentionally
     omitted, per spec \S23's own framing of it as optional -- noted here
     explicitly rather than silently dropped.
@@ -1322,6 +1551,30 @@ online optimization's switching-cost tradeoff, event-triggered control)
 in the absence of a directly competing named policy in the CRP-specific
 literature, rather than claiming a head-to-head win this report's own
 evidence does not support.
+
+\textbf{The finding that supersedes all of the above.}
+\S\ref{sec:dead-zones} answers the question this report kept circling ---
+why does a correctly implemented mechanism almost never find a worthwhile
+repair? --- and the answer is not calibration, benchmark design, or search
+quality. It is that the objective as specified makes the mechanism's
+central tradeoff arithmetically impossible: a normalized delay term caps
+the achievable benefit at $\beta$, permanently below the $\alpha$ that one
+relocation costs (DZ1), and a relative margin outgrows that cap past
+$J_{old}=50$ (DZ2). Zero positive gain across 190 events at
+$\theta_{\text{impact}}=\lambda=\mu=0$ is not a weak result; it is the
+predicted one. Fixing the dimensional inconsistency changes repair
+feasibility from 0/16 instances to 14/16 with gains two orders of magnitude
+larger. \textbf{This reframes the paper: the contribution is a proven
+structural diagnosis of a whole class of stability-aware replanning
+objectives, plus two principled fixes, rather than a method that
+outperforms baselines.} It also generalizes past the CRP --- rolling-horizon
+scheduling, MPC with switching costs, and event-triggered control applied to
+combinatorial problems all combine a bounded benefit term with a relative
+threshold, and inherit the same dead zones. Along the way this
+investigation twice drew a confident conclusion from a single instance and
+twice had to retract it after a systematic sweep; both retractions are
+recorded above rather than quietly corrected, because they are the clearest
+evidence for the methodological point the report argues.
 
 \textbf{Stated plainly, as two separate contributions carrying two
 different kinds of evidence.} The trigger+freeze+repair+stability
