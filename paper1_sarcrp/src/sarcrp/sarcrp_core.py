@@ -39,7 +39,8 @@ def _build_c3(plan_old: Plan, frozen: Plan, tail_solution: Plan) -> Plan:
                 source="frozen+crp_tail", actions=actions)
 
 
-def _score_candidate(plan: Plan, plan_old: Plan, frozen_count: int, urgent_containers: list[str], conf_new: float, state):
+def _score_candidate(plan: Plan, plan_old: Plan, frozen_count: int, urgent_containers: list[str], conf_new: float, state,
+                      lam: float = 1.0, mu: float = 0.5, normalize_delay: bool = True):
     """Scores a candidate plan against spec 11's C_op (which includes the
     M_inf invalidity penalty) -- `is_valid` was hardcoded True here
     unconditionally until this fix, so a candidate that replays illegally
@@ -47,14 +48,23 @@ def _score_candidate(plan: Plan, plan_old: Plan, frozen_count: int, urgent_conta
     look artificially cheap and win candidate selection instead of being
     excluded. Caught building a multi-urgent-container local-search
     operator (N6) whose destination choices could collide with an
-    unrelated later action's assumptions."""
+    unrelated later action's assumptions.
+
+    Second bug fix (self-review): `lam`/`mu` were accepted by replan()'s
+    own signature but never reached this function, which always used
+    compute_objective's defaults (lam=1.0, mu=0.5). SAR-CRP's stability
+    and data-confidence weights were therefore inert -- and ablations A3
+    ("No Stability Cost", lam=0) and A5 ("No Data Confidence Penalty",
+    mu=0) were silent no-ops rather than real ablations. Both are now
+    threaded through; the defaults reproduce every previously-reported
+    number exactly."""
     is_valid = is_plan_valid(plan, state)
-    op = operational_cost(plan, urgent_containers, is_valid=is_valid)
+    op = operational_cost(plan, urgent_containers, is_valid=is_valid, normalize_delay=normalize_delay)
     stab, violated = stability_cost(plan, plan_old, frozen_count)
     if violated:
         return float("inf")
     data = data_confidence_cost(plan, plan_old, conf_new)
-    return compute_objective(op, stab, data)
+    return compute_objective(op, stab, data, lam=lam, mu=mu)
 
 
 def _apply_fallback_margin(
@@ -164,7 +174,20 @@ def replan(
     mu: float = 0.5,
     theta_impact: float = 0.30,
     tau_frac: float = 0.01,
-    time_limit_sec: float = 5.0,
+    tau_abs: float | None = None,
+    normalize_delay: bool = True,
+    # REPRODUCIBILITY (bug #11, self-review): a wall-clock cutoff makes
+    # results machine- and load-dependent. Measured on the 44-container
+    # existence-proof instance: the local-search walk finishes naturally in
+    # 4.10s, i.e. 82% of this 5.0s default budget -- so a machine ~20%
+    # slower truncates the walk, the repair gain collapses from 0.2119 to
+    # 0.0, and the decision flips KEEP<->UPDATE. That is exactly why the
+    # same Scenario E run yields 18/20 updates on an idle machine and 13/20
+    # under load. Pass time_limit_sec=None for the DETERMINISTIC budget
+    # (iteration-count only, t_iters/m_neighbors), which is what any
+    # reported number should use; the float default is retained only so
+    # previously logged runs stay reproducible bit-for-bit.
+    time_limit_sec: float | None = 5.0,
     rng: random.Random | None = None,
     conf_new: float = 1.0,
     use_local_search: bool = True,
@@ -194,7 +217,7 @@ def replan(
 
     # Step 3: trigger check.
     if impact.total < theta_impact:
-        j_old = _score_candidate(plan_old, plan_old, 0, urgent_containers, conf_new, state_t)
+        j_old = _score_candidate(plan_old, plan_old, 0, urgent_containers, conf_new, state_t, lam=lam, mu=mu, normalize_delay=normalize_delay)
         return ReplanDecision(decision="KEEP", plan=plan_old, impact=impact, j_old=j_old, j_new=j_old,
                                carried_gain_next=carried_gain)
 
@@ -210,6 +233,7 @@ def replan(
         c2 = local_search_repair(
             c1, plan_old, state_t, new_queue, frozen_count, rng,
             urgent_containers=urgent_containers, conf_new=conf_new, time_limit_sec=time_limit_sec,
+            lam=lam, mu=mu, normalize_delay=normalize_delay,
         )
         candidates.append(c2)
     shadow_state, remaining_queue = apply_frozen_prefix(state_t, frozen, new_queue)
@@ -218,14 +242,29 @@ def replan(
     candidates.append(c3)
 
     # Step 6: score every candidate.
-    scored = [(_score_candidate(c, plan_old, frozen_count, urgent_containers, conf_new, state_t), c) for c in candidates]
+    scored = [(_score_candidate(c, plan_old, frozen_count, urgent_containers, conf_new, state_t, lam=lam, mu=mu, normalize_delay=normalize_delay), c) for c in candidates]
 
     # Step 7: select best.
     j_best, p_best = min(scored, key=lambda pair: pair[0])
-    j_old = _score_candidate(plan_old, plan_old, 0, urgent_containers, conf_new, state_t)
+    j_old = _score_candidate(plan_old, plan_old, 0, urgent_containers, conf_new, state_t, lam=lam, mu=mu, normalize_delay=normalize_delay)
 
     # Step 8: fallback check (extended with the carried-gain lookahead margin).
+    #
+    # tau_abs implements the mixed relative-absolute threshold standard in
+    # event-triggered control (see Related Work's cited survey), motivated
+    # by a provable dead zone in the purely relative form: the largest
+    # operational gain any delay-driven repair can produce is exactly beta
+    # (RetrievalDelayNorm is normalized to [0,1]), a CONSTANT, while a
+    # purely relative tau = tau_frac * j_old grows with instance size. So
+    # for j_old >= beta/tau_frac = 50, no delay-driven repair can ever
+    # clear the margin -- impossible by construction, not merely unlikely
+    # (see tests/test_objective_dead_zones.py, and the arithmetic behind
+    # Scenario B's "near miss" at j_old=61.49). Capping tau at an absolute
+    # ceiling removes that scale-dependent dead zone. tau_abs=None (the
+    # default) reproduces the original purely-relative criterion exactly.
     tau = tau_frac * j_old if j_old not in (0.0, float("inf")) else 0.0
+    if tau_abs is not None:
+        tau = min(tau, tau_abs)
     decision, carried_gain_next = _apply_fallback_margin(
         j_old, j_best, tau, carried_gain, carried_gain_cap, carried_gain_decay,
     )

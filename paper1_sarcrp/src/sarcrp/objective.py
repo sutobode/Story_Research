@@ -5,19 +5,109 @@ from sarcrp.schemas import Action, Plan
 DEFAULT_PENALTIES = {"p_c": 2.0, "p_a": 2.0, "p_d": 1.0, "p_o": 1.0, "p_m": 10.0,
                       "p_f": math.inf, "p_insert": 1.5, "p_delete": 1.5}
 
+BETA_DEFAULT = 0.5  # operational_cost's own beta default, named so the bound below is derivable
+
+
+def max_delay_driven_gain(beta: float = BETA_DEFAULT, plan_length: int | None = None,
+                           normalize_delay: bool = True) -> float:
+    """The exact upper bound on the operational gain any repair can obtain
+    by expediting urgent containers alone -- the quantity behind this
+    project's two proven "dead zones" (tests/test_objective_dead_zones.py).
+
+    RetrievalDelayNorm is normalized into [0, 1] (its denominator is
+    len(urgent) * (len(plan) + 1)), so beta * RetrievalDelayNorm is bounded
+    by beta REGARDLESS of instance size. With plan_length given, the bound
+    is tighter and exact: moving a single urgent container from the last
+    plan position to the first changes the normalized delay by
+    (L - 1) / (L + 1), so the achievable gain is beta * (L - 1) / (L + 1),
+    which approaches beta from below as L grows.
+
+    Two consequences, both provable rather than empirical:
+      * DZ1: one relocation costs alpha (=1.0 by default) > beta, so
+        expediting an urgent container can never pay for even one extra
+        relocation, at any scale.
+      * DZ2: a purely relative switching margin tau = tau_frac * J_old
+        grows with instance size while this bound does not, so beyond
+        J_old = beta / tau_frac no delay-driven repair can ever clear the
+        margin. See derive_tau_abs for the fix.
+
+    With normalize_delay=False (retrieval_delay_actions, the DZ1 fix) the
+    bound instead GROWS with the plan: moving a single urgent container
+    from the last position to the first saves (L-1) actions of waiting, so
+    the achievable gain is beta * (L-1) -- unbounded in L, hence able to
+    pay for relocations once the instance is large enough. That removes
+    DZ1's scale-independent ceiling entirely."""
+    if plan_length is None:
+        return beta if normalize_delay else float("inf")
+    if plan_length <= 1:
+        return 0.0
+    if not normalize_delay:
+        return beta * (plan_length - 1)
+    return beta * (plan_length - 1) / (plan_length + 1)
+
+
+def derive_tau_abs(kappa: float = 0.5, beta: float = BETA_DEFAULT) -> float:
+    """Derives the absolute ceiling for the mixed relative-absolute
+    switching margin (sarcrp_core.replan's tau_abs) FROM the objective's own
+    achievable-gain bound, rather than fixing it as a free constant.
+
+    The margin's job is hysteresis: reject switches whose benefit is
+    trivial *relative to what is achievable at all*. Since the maximum
+    achievable delay-driven gain is exactly beta (see
+    max_delay_driven_gain), requiring a repair to capture at least a
+    fraction kappa of it gives tau_abs = kappa * beta. kappa=0.5 ("capture
+    at least half the achievable benefit") is the default.
+
+    This is a derivation, not a tuned value: the empirical result it
+    produces is insensitive to kappa over the whole range tested
+    (kappa in {0.25, 0.5, 0.75} all give an identical 19/20 update rate on
+    the 50-container instance where the purely relative margin gives
+    0/20), because ANY ceiling below the achievable gain unblocks the
+    decision equally. What fails is the unbounded relative FORM of the
+    margin, not a particular constant."""
+    if not 0.0 < kappa < 1.0:
+        raise ValueError(f"kappa must be in (0, 1), got {kappa!r}")
+    return kappa * beta
+
 
 def relocation_count(plan: Plan) -> int:
     return sum(1 for a in plan.actions if a.type == "RELOCATE")
 
 
 def retrieval_delay_norm(plan: Plan, urgent_containers: list[str]) -> float:
-    """RetrievalDelayNorm(P) (spec 11.2 / 45.2)."""
+    """RetrievalDelayNorm(P) (spec 11.2 / 45.2). Dimensionless, in [0, 1]."""
     if not urgent_containers:
         return 0.0
     positions = {a.container: i for i, a in enumerate(plan.actions)}
     total = sum(positions.get(c, len(plan.actions) + 1) for c in urgent_containers)
     denom = len(urgent_containers) * (len(plan.actions) + 1)
     return total / denom if denom else 0.0
+
+
+def retrieval_delay_actions(plan: Plan, urgent_containers: list[str]) -> float:
+    """DZ1 fix: the same delay measured in CRANE ACTIONS instead of as a
+    dimensionless [0,1] fraction.
+
+    The dead zone DZ1 (tests/test_objective_dead_zones.py) is a dimensional
+    inconsistency, not a badly chosen weight: C_op adds alpha*R(P), a COUNT
+    of crane actions, to beta*RetrievalDelayNorm(P), a dimensionless RATIO.
+    Because the ratio is capped at 1, the delay term's whole contribution is
+    capped at beta however large the instance is -- so it can never pay for
+    even one relocation (alpha=1.0 > beta=0.5), at any scale.
+
+    Measuring delay in the same unit as relocations removes that
+    inconsistency: an urgent container sitting at plan position p means its
+    truck waits p crane actions, and one relocation adds one action. beta
+    then has a real interpretation -- the cost of one action of urgent-truck
+    waiting, relative to alpha, the cost of one relocation -- i.e. the
+    terminal's own service-level-vs-throughput tradeoff, a policy choice
+    this project characterizes rather than prescribes (no operational
+    calibration data is claimed here)."""
+    if not urgent_containers:
+        return 0.0
+    positions = {a.container: i for i, a in enumerate(plan.actions)}
+    total = sum(positions.get(c, len(plan.actions) + 1) for c in urgent_containers)
+    return total / len(urgent_containers)
 
 
 def operational_cost(
@@ -28,12 +118,20 @@ def operational_cost(
     beta: float = 0.5,
     gamma: float = 1.0,
     m_inf: float = 1e6,
+    normalize_delay: bool = True,
 ) -> float:
-    """C_op(P) = alpha*R(P) + beta*RetrievalDelay(P) + gamma*InvalidPenalty(P) (spec 11, 45.1)."""
+    """C_op(P) = alpha*R(P) + beta*RetrievalDelay(P) + gamma*InvalidPenalty(P) (spec 11, 45.1).
+
+    normalize_delay=True (the default) uses spec's dimensionless
+    RetrievalDelayNorm and reproduces every previously reported number
+    exactly. normalize_delay=False uses retrieval_delay_actions instead --
+    the DZ1 fix, delay in crane actions, commensurate with alpha*R(P)."""
     invalid_penalty = 0.0 if is_valid else m_inf
+    delay = (retrieval_delay_norm(plan, urgent_containers) if normalize_delay
+             else retrieval_delay_actions(plan, urgent_containers))
     return (
         alpha * relocation_count(plan)
-        + beta * retrieval_delay_norm(plan, urgent_containers)
+        + beta * delay
         + gamma * invalid_penalty
     )
 

@@ -61,6 +61,18 @@ FORCED_EVENT_CONFIDENCE = 0.75  # plausible mid/high-uncertainty confidence for 
 SCALE_EVENT_CONFIDENCE = 0.5  # inside event_generator.CONFIDENCE_RANGE_BY_UNCERTAINTY["high"] = (0.20, 0.80)
 
 
+# Bug #11 (self-review): a wall-clock cutoff makes results machine- and
+# load-dependent. Measured on instance B: the local-search walk finishes
+# naturally in 4.10s, i.e. 82% of the previous 5.0s budget -- so a ~20%
+# slower or busier machine truncates it, the repair gain collapses from
+# 0.211917 to exactly 0.0, and the decision flips. That is why the same
+# Scenario E run reported 18/20 updates on an idle machine and 13/20 under
+# load, with identical code and seeds. None selects the deterministic
+# budget (iteration counts only). Because the untruncated walk already
+# completed within the old budget, every previously reported number is
+# unchanged -- only now it is reproducible on any machine.
+DETERMINISTIC_BUDGET = None
+
 def build_scenario() -> tuple[YardState, list[str]]:
     """7 containers, not 10: is_action_affected's rank-shift rule (spec 8.5,
     r_shift=5 default) only flags TARGET's own action when its shift is
@@ -151,13 +163,13 @@ def run_once(seed: int) -> dict:
     """Scenario A (small, 7 containers)."""
     rng = random.Random(seed)
     state, old_queue = build_scenario()
-    plan_old = solve_crp(state, old_queue, time_limit_sec=5.0)
+    plan_old = solve_crp(state, old_queue, time_limit_sec=DETERMINISTIC_BUDGET)
     new_queue = force_urgent_insertion(old_queue, TARGET)
     urgent = [TARGET]
 
     impact = compute_impact(old_queue, new_queue, state, state, plan_old, conf_new=FORCED_EVENT_CONFIDENCE)
-    decision = replan(state, plan_old, old_queue, new_queue, urgent, rng=rng, conf_new=FORCED_EVENT_CONFIDENCE, time_limit_sec=5.0)
-    full_reopt_plan = full_reoptimization(state, new_queue, time_limit_sec=5.0)
+    decision = replan(state, plan_old, old_queue, new_queue, urgent, rng=rng, conf_new=FORCED_EVENT_CONFIDENCE, time_limit_sec=DETERMINISTIC_BUDGET)
+    full_reopt_plan = full_reoptimization(state, new_queue, time_limit_sec=DETERMINISTIC_BUDGET)
     static_result = static_plan(plan_old)
 
     rows = [
@@ -181,12 +193,12 @@ def run_once_scale(seed: int) -> dict:
     """Scenario B (50 containers, crp_rl_scale_instance.json)."""
     rng = random.Random(seed)
     state, old_queue, target = build_scale_scenario()
-    plan_old = solve_crp(state, old_queue, time_limit_sec=5.0)
+    plan_old = solve_crp(state, old_queue, time_limit_sec=DETERMINISTIC_BUDGET)
     new_queue = force_urgent_insertion(old_queue, target)
     urgent = [target]
 
     impact = compute_impact(old_queue, new_queue, state, state, plan_old, conf_new=SCALE_EVENT_CONFIDENCE)
-    decision = replan(state, plan_old, old_queue, new_queue, urgent, rng=rng, conf_new=SCALE_EVENT_CONFIDENCE, time_limit_sec=5.0)
+    decision = replan(state, plan_old, old_queue, new_queue, urgent, rng=rng, conf_new=SCALE_EVENT_CONFIDENCE, time_limit_sec=DETERMINISTIC_BUDGET)
     gain = decision.j_old - decision.j_new
     tau = 0.01 * decision.j_old
     return {
@@ -211,7 +223,7 @@ def run_multistep_scenario(seed: int, extra_steps: int = 10) -> dict:
     random event stream (seeded), isolating the effect of the single
     forced-event decision from everything after it."""
     state, old_queue, target = build_scale_scenario()
-    plan_initial = solve_crp(state, old_queue, time_limit_sec=5.0)
+    plan_initial = solve_crp(state, old_queue, time_limit_sec=DETERMINISTIC_BUDGET)
     forced_new_queue = force_urgent_insertion(old_queue, target)
     urgent = [target]
 
@@ -223,7 +235,7 @@ def run_multistep_scenario(seed: int, extra_steps: int = 10) -> dict:
         rng = random.Random(seed)
         decision = replan(
             state, plan_initial, old_queue, forced_new_queue, urgent, rng=rng,
-            conf_new=SCALE_EVENT_CONFIDENCE, tau_frac=tau_frac_at_forced_event, time_limit_sec=5.0,
+            conf_new=SCALE_EVENT_CONFIDENCE, tau_frac=tau_frac_at_forced_event, time_limit_sec=DETERMINISTIC_BUDGET,
         )
         plan, queue = decision.plan, forced_new_queue
         total_cost = decision.j_new
@@ -231,7 +243,7 @@ def run_multistep_scenario(seed: int, extra_steps: int = 10) -> dict:
             ev_urgent = [event.affected_containers[0]] if event.type == "URGENT_INSERTION" and event.affected_containers else []
             step_decision = replan(
                 state, plan, queue, event.new_queue, ev_urgent, rng=rng,
-                conf_new=event.confidence, time_limit_sec=5.0,  # default tau_frac=0.01 for every later step
+                conf_new=event.confidence, time_limit_sec=DETERMINISTIC_BUDGET,  # default tau_frac=0.01 for every later step
             )
             total_cost += step_decision.j_new
             plan, queue = step_decision.plan, event.new_queue
@@ -259,7 +271,7 @@ def run_lookahead_validation(seed: int, extra_steps: int = 10) -> dict:
     anywhere, matching the "sarcrp_lookahead" method). Both face the
     identical subsequent event stream."""
     state, old_queue, target = build_scale_scenario()
-    plan_initial = solve_crp(state, old_queue, time_limit_sec=5.0)
+    plan_initial = solve_crp(state, old_queue, time_limit_sec=DETERMINISTIC_BUDGET)
     forced_new_queue = force_urgent_insertion(old_queue, target)
     urgent = [target]
 
@@ -272,7 +284,7 @@ def run_lookahead_validation(seed: int, extra_steps: int = 10) -> dict:
         carried_gain = 0.0
         decision = replan(
             state, plan_initial, old_queue, forced_new_queue, urgent, rng=rng,
-            conf_new=SCALE_EVENT_CONFIDENCE, carried_gain=carried_gain, time_limit_sec=5.0,
+            conf_new=SCALE_EVENT_CONFIDENCE, carried_gain=carried_gain, time_limit_sec=DETERMINISTIC_BUDGET,
         )
         plan, queue = decision.plan, forced_new_queue
         total_cost = decision.j_new
@@ -281,7 +293,7 @@ def run_lookahead_validation(seed: int, extra_steps: int = 10) -> dict:
             ev_urgent = [event.affected_containers[0]] if event.type == "URGENT_INSERTION" and event.affected_containers else []
             step_decision = replan(
                 state, plan, queue, event.new_queue, ev_urgent, rng=rng,
-                conf_new=event.confidence, time_limit_sec=5.0, carried_gain=carried_gain,
+                conf_new=event.confidence, time_limit_sec=DETERMINISTIC_BUDGET, carried_gain=carried_gain,
             )
             total_cost += step_decision.j_new
             plan, queue = step_decision.plan, event.new_queue
@@ -320,12 +332,12 @@ def run_scenario_e(seed: int, carried_gain_cap: float | None = None, carried_gai
     conservative capped/decayed variants to check whether the win above
     is an artifact of the carry being allowed to accumulate unbounded."""
     state_a, old_queue_a, target_a = build_scale_scenario()
-    plan_a = solve_crp(state_a, old_queue_a, time_limit_sec=5.0)
+    plan_a = solve_crp(state_a, old_queue_a, time_limit_sec=DETERMINISTIC_BUDGET)
     new_queue_a = force_urgent_insertion(old_queue_a, target_a)
     urgent_a = [target_a]
 
     state_b, old_queue_b, target_b = build_scale_scenario_b()
-    plan_b = solve_crp(state_b, old_queue_b, time_limit_sec=5.0)
+    plan_b = solve_crp(state_b, old_queue_b, time_limit_sec=DETERMINISTIC_BUDGET)
     new_queue_b = force_urgent_insertion(old_queue_b, target_b)
     urgent_b = [target_b]
 
@@ -340,11 +352,11 @@ def run_scenario_e(seed: int, carried_gain_cap: float | None = None, carried_gai
     def run_path(use_lookahead: bool, carried_gain_cap: float | None = None, carried_gain_decay: float = 1.0) -> dict:
         rng = random.Random(seed)
         decision_a = replan(state_a, plan_a, old_queue_a, new_queue_a, urgent_a, rng=rng,
-                             conf_new=SCALE_EVENT_CONFIDENCE, time_limit_sec=5.0,
+                             conf_new=SCALE_EVENT_CONFIDENCE, time_limit_sec=DETERMINISTIC_BUDGET,
                              carried_gain_cap=carried_gain_cap, carried_gain_decay=carried_gain_decay)
         carried = decision_a.carried_gain_next if use_lookahead else 0.0
         decision_b = replan(state_b, plan_b, old_queue_b, new_queue_b, urgent_b, rng=rng,
-                             conf_new=SCALE_EVENT_CONFIDENCE, time_limit_sec=5.0, carried_gain=carried,
+                             conf_new=SCALE_EVENT_CONFIDENCE, time_limit_sec=DETERMINISTIC_BUDGET, carried_gain=carried,
                              carried_gain_cap=carried_gain_cap, carried_gain_decay=carried_gain_decay)
         total_cost = _realized_cost(decision_a) + _realized_cost(decision_b)
         return {"total_cost": total_cost, "decision_b": decision_b.decision}

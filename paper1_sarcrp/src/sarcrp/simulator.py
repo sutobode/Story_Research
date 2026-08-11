@@ -54,7 +54,8 @@ def _plan_changed_count(plan_a, plan_b) -> int:
 
 def run_episode(
     instance: dict, method_name: str, rng: random.Random,
-    h_f: int | None = None, lam: float | None = None, time_limit_sec: float = 5.0,
+    h_f: int | None = None, lam: float | None = None, theta_impact: float | None = None,
+    time_limit_sec: float = 5.0,
 ) -> EpisodeMetrics:
     queue = list(instance["initial_retrieval_order"])
     state = _build_state(instance, queue)
@@ -82,6 +83,8 @@ def run_episode(
             replan_kwargs["h_f"] = h_f
         if lam is not None:
             replan_kwargs["lam"] = lam
+        if theta_impact is not None:
+            replan_kwargs["theta_impact"] = theta_impact
 
         start = time.monotonic()
         if method_name == "static":
@@ -141,7 +144,16 @@ def run_episode(
         op = operational_cost(new_plan, urgent, is_valid=is_valid)
         stab, violated = stability_cost(new_plan, plan, frozen_count=0)
         data = data_confidence_cost(new_plan, plan, event.confidence)
-        j = compute_objective(op, 0.0 if violated else stab, data)
+        # Bug fix (self-review, see Limitations): `lam` was threaded into
+        # replan_kwargs for sarcrp's OWN candidate-selection decision, but
+        # the episode-level score reported for EVERY method (including
+        # sarcrp) still called compute_objective at its lam=1.0 default,
+        # so Experiment 1's lam factor never affected any reported number
+        # -- confirmed directly from experiment1_results.csv: all cells
+        # identical across lam in {0.0, 0.5, 1.0}. Reported cost for every
+        # method now uses the SAME lam the experiment is sweeping, so all
+        # methods are compared under one consistent objective per cell.
+        j = compute_objective(op, 0.0 if violated else stab, data, lam=lam if lam is not None else 1.0)
         total_costs.append(j)
         op_costs.append(op)
         stab_costs.append(0.0 if violated else stab)

@@ -10,18 +10,26 @@ from sarcrp.schemas import Action, Plan, Stack, YardState
 from sarcrp.state_ops import find_stack
 
 
-def _score(plan: Plan, p_old: Plan, frozen_count: int, urgent_containers: list[str], conf_new: float, state) -> float:
+def _score(plan: Plan, p_old: Plan, frozen_count: int, urgent_containers: list[str], conf_new: float, state,
+            lam: float = 1.0, mu: float = 0.5, normalize_delay: bool = True) -> float:
     """`is_valid` was hardcoded True here unconditionally until this fix, so
     a candidate that replays illegally could look artificially cheap and
     win the hill-climbing walk instead of being excluded (spec 11.3's
-    M_inf penalty)."""
+    M_inf penalty).
+
+    `lam`/`mu` were likewise hardcoded to compute_objective's defaults
+    until a later self-review fix: the hill-climbing walk optimized a
+    fixed lam=1.0/mu=0.5 objective even when its caller (sarcrp_core.replan)
+    was given different weights, so the local-search candidate was
+    optimized for a different objective than the one used to select
+    among candidates. Defaults reproduce prior behavior exactly."""
     is_valid = is_plan_valid(plan, state)
-    op = operational_cost(plan, urgent_containers, is_valid=is_valid)
+    op = operational_cost(plan, urgent_containers, is_valid=is_valid, normalize_delay=normalize_delay)
     stab, violated = stability_cost(plan, p_old, frozen_count)
     if violated:
         return float("inf")
     data = data_confidence_cost(plan, p_old, conf_new)
-    return compute_objective(op, stab, data)
+    return compute_objective(op, stab, data, lam=lam, mu=mu)
 
 
 def _neighbor_change_destination(plan: Plan, state, frozen_count: int, rng: random.Random) -> Plan | None:
@@ -255,6 +263,9 @@ def local_search_repair(
     time_limit_sec: float | None = None,
     urgent_containers: list[str] | None = None,
     conf_new: float = 1.0,
+    lam: float = 1.0,
+    mu: float = 0.5,
+    normalize_delay: bool = True,
 ) -> Plan:
     """Stochastic hill climbing over N1-N5 (spec 15.2/46.3).
 
@@ -272,7 +283,7 @@ def local_search_repair(
     urgent = urgent_containers or []
     start_time = time.monotonic()
     current = p_start
-    score_current = _score(current, p_old, frozen_count, urgent, conf_new, state)
+    score_current = _score(current, p_old, frozen_count, urgent, conf_new, state, lam=lam, mu=mu, normalize_delay=normalize_delay)
     best, score_best = current, score_current
     stale_iterations = 0
 
@@ -293,7 +304,7 @@ def local_search_repair(
             continue
         stale_iterations = 0
 
-        scored = [(_score(n, p_old, frozen_count, urgent, conf_new, state), n) for n in neighbors]
+        scored = [(_score(n, p_old, frozen_count, urgent, conf_new, state, lam=lam, mu=mu, normalize_delay=normalize_delay), n) for n in neighbors]
         candidate_score, candidate_plan = min(scored, key=lambda pair: pair[0])
 
         if candidate_score < score_current:

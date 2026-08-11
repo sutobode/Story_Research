@@ -79,6 +79,34 @@ def test_run_episode_rejects_unknown_method():
         pass
 
 
+def test_run_episode_lam_affects_reported_total_cost_for_every_method():
+    # Regression test for a real bug (self-review): compute_objective's
+    # lam was previously hardcoded to its default (1.0) at the
+    # episode-level scoring call regardless of what lam run_episode itself
+    # received -- confirmed directly from experiment1_results.csv, where
+    # every one of the 27 (uncertainty, freeze_size, lam) grid cells
+    # reported byte-identical numbers across lam in {0.0, 0.5, 1.0}.
+    # full_reopt's plan differs from the prior plan on essentially every
+    # event (it always re-solves), so its stability cost is reliably
+    # nonzero -- lam=0.0 must report a strictly lower total_cost_mean than
+    # lam=1.0 once the fix threads lam into that scoring call for every
+    # method, not just sarcrp's own internal candidate selection.
+    low_lam = run_episode(SMALL_INSTANCE, method_name="full_reopt", rng=random.Random(3), lam=0.0)
+    high_lam = run_episode(SMALL_INSTANCE, method_name="full_reopt", rng=random.Random(3), lam=1.0)
+    assert low_lam.total_cost_mean < high_lam.total_cost_mean
+    assert low_lam.operational_cost_mean == high_lam.operational_cost_mean  # only the stability term should move
+
+
+def test_run_episode_default_lam_is_unchanged_when_not_passed():
+    # Backward compatibility: callers that never pass lam (Experiment 3/4,
+    # every existence-proof scenario) must see byte-identical behavior to
+    # before this fix -- lam=None still means the objective's own default
+    # (1.0), not a new implicit value.
+    explicit = run_episode(SMALL_INSTANCE, method_name="full_reopt", rng=random.Random(3), lam=1.0)
+    implicit = run_episode(SMALL_INSTANCE, method_name="full_reopt", rng=random.Random(3))
+    assert explicit.total_cost_mean == implicit.total_cost_mean
+
+
 def test_run_episode_threads_h_f_and_lam_into_replan(monkeypatch):
     # A behavioral difference is NOT a reliable signal here: Task 26's SC4
     # finding (mean impact=0.090, well under the trigger threshold 0.30)

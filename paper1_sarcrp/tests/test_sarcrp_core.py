@@ -284,6 +284,38 @@ def test_carried_gain_decay_steady_state_above_tau_eventually_triggers():
     assert any(decision == "UPDATE" for decision, _ in trace)
 
 
+def test_replan_tau_abs_caps_the_margin_and_defaults_to_the_relative_form():
+    # DZ2 fix wiring (see tests/test_objective_dead_zones.py for the
+    # arithmetic): tau_abs must actually reach the fallback-margin check,
+    # and tau_abs=None must leave the purely relative criterion untouched.
+    import sarcrp.sarcrp_core as sarcrp_core_module
+
+    state = make_state(["C1", "C2", "C3"])
+    plan_old = make_plan()
+    seen = {}
+
+    def spy_margin(j_old, j_best, tau, carried_gain, carried_gain_cap=None, carried_gain_decay=1.0):
+        seen["tau"] = tau
+        return "KEEP", 0.0
+
+    monkeypatch_target = "_apply_fallback_margin"
+    original = getattr(sarcrp_core_module, monkeypatch_target)
+    try:
+        setattr(sarcrp_core_module, monkeypatch_target, spy_margin)
+        replan(state, plan_old, ["C1", "C2", "C3"], ["C3", "C2", "C1"], ["C3"],
+                theta_impact=0.05, tau_frac=1.0, rng=random.Random(0))
+        tau_relative = seen["tau"]
+
+        replan(state, plan_old, ["C1", "C2", "C3"], ["C3", "C2", "C1"], ["C3"],
+                theta_impact=0.05, tau_frac=1.0, tau_abs=0.01, rng=random.Random(0))
+        tau_capped = seen["tau"]
+    finally:
+        setattr(sarcrp_core_module, monkeypatch_target, original)
+
+    assert tau_capped == 0.01  # the absolute ceiling binds
+    assert tau_capped < tau_relative  # and it genuinely lowered the margin
+
+
 def test_apply_fallback_margin_decay_can_flip_update_back_to_keep():
     # R1.2: same numbers as test_apply_fallback_margin_updates_once_carried_
     # plus_new_gain_clears_tau (raw_gain~0.51, carried_gain=0.514, tau=0.615,
