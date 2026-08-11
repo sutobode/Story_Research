@@ -1,9 +1,15 @@
 """Generates the report's two figures as standalone PDFs via matplotlib
 (tikz/pgfplots were unavailable -- the server's texlive2019 install has no
 internet-reachable CTAN mirror for tlmgr, so figures are rendered here
-instead and included via \\includegraphics). Run once; commit the
-resulting PDFs alongside main.tex/main.pdf so the report doesn't depend
-on re-running this script to build.
+instead and included via \\includegraphics). Run once; commit the resulting
+PDFs alongside main.tex/main.pdf so the report doesn't depend on re-running
+this script to build.
+
+Output is deterministic: metadata={"CreationDate": None} suppresses the
+timestamp matplotlib otherwise embeds, which would make every regeneration
+produce byte-different PDFs and dirty the working tree whenever the test
+suite exercises this script. Same class of nondeterminism as this project's
+bug #11, fixed the same way -- by removing the clock from the output.
 """
 import matplotlib
 matplotlib.use("Agg")
@@ -50,7 +56,7 @@ def make_pipeline_diagram():
 
     fig.tight_layout()
     OUT_DIR.mkdir(parents=True, exist_ok=True)
-    fig.savefig(OUT_DIR / "pipeline.pdf")
+    fig.savefig(OUT_DIR / "pipeline.pdf", metadata={"CreationDate": None})
     plt.close(fig)
 
 
@@ -76,7 +82,7 @@ def make_exp1_cost_chart():
     ax.legend(loc="upper center", bbox_to_anchor=(0.5, -0.15), ncol=5, fontsize=8)
     fig.tight_layout()
     OUT_DIR.mkdir(parents=True, exist_ok=True)
-    fig.savefig(OUT_DIR / "exp1_cost.pdf")
+    fig.savefig(OUT_DIR / "exp1_cost.pdf", metadata={"CreationDate": None})
     plt.close(fig)
 
 
