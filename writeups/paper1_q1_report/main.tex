@@ -76,14 +76,16 @@ artifact: grounding event frequency in a real, cited terminal statistic
 (Port of Casablanca's optimized truck appointment system, 7.8\% of
 arrivals rescheduled) instead of an uncalibrated internal constant makes
 the trigger fire \emph{even less} often, not more. \textbf{Second}, the
-report's central, evidence-backed contribution: a carried-gain lookahead
-extension to the fallback margin, which we characterize both
-theoretically and empirically. Theoretically, we prove it implements a
-lazy, accumulation-triggered threshold policy in the same family as
-smoothed online optimization's switching-cost algorithms, with a provable
-bounded overshoot (never exceeds the hysteresis margin by more than one
-round's own gain) and provable non-triggering conditions for capped/decayed
-variants -- not an ad hoc heuristic. Empirically, a deliberately
+report's other evidence-backed result before the dead-zone diagnosis
+above superseded it: a carried-gain lookahead extension to the fallback
+margin, which we characterize both theoretically and empirically. The
+mechanism itself is not new -- it is, on inspection, a one-sided CUSUM
+control chart~\cite{page1954} (accumulate, compare to a decision interval,
+act and reset) applied to the fallback margin -- but we derive and verify
+its run-length properties in this setting: a provable bounded overshoot
+(never exceeds the hysteresis margin by more than one round's own gain)
+and provable non-triggering conditions for capped/decayed variants.
+Empirically, a deliberately
 constructed existence-proof experiment isolates and confirms every
 pipeline stage end-to-end, finds a real improving candidate at industrial
 scale (50 containers) that lands just under the fallback margin, and
@@ -133,11 +135,17 @@ frozen prefix (limit how much of a plan can change per revision), and
 smoothed online optimization (trade an operating cost against a switching
 cost). \S\ref{sec:related-work} positions this paper's method,
 SAR-CRP v2 (Stability-Aware Replanning for the CRP), as a CRP-specific
-instantiation and extension of these three ideas, combined for the first
-time (to the knowledge of this report) in the CRP setting, with a novel
-addition -- a carried-gain lookahead margin -- validated both
-theoretically (\S\ref{sec:theory}) and empirically
-(\S\ref{sec:existence-proof}--\S\ref{sec:lookahead}).
+combination of these ideas -- including a carried-gain lookahead margin
+that is, on inspection (\S\ref{sec:theory}), a one-sided CUSUM control
+chart~\cite{page1954} applied to the fallback margin, not a new mechanism
+-- validated both theoretically and empirically
+(\S\ref{sec:existence-proof}--\S\ref{sec:lookahead}). We make no claim of
+algorithmic novelty; every individual mechanism used here (event-triggered
+thresholds, rolling-horizon freezing, CUSUM accumulation) predates this
+report by decades. What is new is the diagnosis in
+\S\ref{sec:dead-zones} and the characterization of how each existing
+mechanism behaves -- and fails -- when combined in this specific way for
+the CRP.
 
 \textbf{Contributions.} (1) A checkable impact-trigger + freeze-horizon +
 stability-aware local-search-repair pipeline for CRP replanning, specified
@@ -755,19 +763,28 @@ looking superficially symmetric (``a conservative cap'' vs.\ ``a
 conservative decay''): they act on different timescales, and only the cap
 bound applies at Scenario E's timescale of exactly one hop.
 
-\textbf{Positioning.} These propositions connect \texttt{carried\_gain}
-directly to the smoothed-online-optimization lineage cited in
-\S\ref{sec:related-work} (Goel and Wierman 2018): it is a lazy,
-accumulation-triggered threshold policy in the same family as that
-literature's own algorithms (e.g.\ Online Balanced Descent's ``wait for
-enough accumulated pressure before moving''), with a provable bounded
-overshoot rather than an ad hoc heuristic that merely happens to work on
-this report's own scenarios. This is not a competitive-ratio bound
-against an optimal offline switching policy (which would require
-assumptions about the cost model's convexity that this project's discrete,
-combinatorial CRP objective does not straightforwardly satisfy) -- it is
-a structural characterization of the mechanism's own timing behavior,
-scoped honestly to what is actually proved.
+\textbf{Positioning, corrected on self-review: \texttt{carried\_gain} is not
+a new technique.} It is, structurally, a one-sided CUSUM (cumulative sum)
+control chart~\cite{page1954}: accumulate a signal (here, foregone
+sub-margin gain) each round, compare the running sum to a decision interval
+(here, $\tau$), act and reset when it is crossed, otherwise carry the sum
+forward untouched. Page's original 1954 scheme is exactly this rule applied
+to detecting a shift in a monitored process mean; the propositions above
+(bounded overshoot, timeliness, cap/decay sufficiency conditions) are
+standard CUSUM run-length properties, not novel results about this
+mechanism specifically. The connection to smoothed online optimization's
+lazy-threshold algorithms (Goel and Wierman 2018, \S\ref{sec:related-work})
+is a second, compatible description of the same accumulate-then-switch
+idea, not an independent one. \textbf{The contribution here is applying a
+70-year-old accumulation rule to the CRP fallback margin and characterizing
+its behavior on this specific problem (Table~\ref{tab:dead-zone-2x2}'s
+finding that it does not rescue DZ1, only DZ2, is new; the mechanism
+itself is not.} This is not a competitive-ratio bound against an optimal
+offline switching policy (which would require convexity assumptions this
+project's discrete, combinatorial CRP objective does not satisfy) -- it is
+a structural characterization of a known mechanism's timing behavior in a
+new setting, scoped honestly to what is actually proved and to what is
+actually new.
 
 \textbf{Does the sub-margin-gain pattern behind instances A/B recur more
 generally, or was instance B a one-off?} \texttt{sweep\_chained\_instances.py}
@@ -1668,6 +1685,10 @@ S.~V.~Sridharan, W.~L.~Berry, and V.~Udayabhanu, ``Freezing the Master
 Production Schedule Under Rolling Planning Horizons,'' \emph{Management
 Science}, vol.~33, no.~9, pp.~1137--1149, 1987.
 \url{https://doi.org/10.1287/mnsc.33.9.1137}
+
+\bibitem{page1954}
+E.~S.~Page, ``Continuous Inspection Schemes,'' \emph{Biometrika}, vol.~41,
+no.~1--2, pp.~100--115, 1954. \url{https://doi.org/10.1093/biomet/41.1-2.100}
 
 \bibitem{goel2018}
 G.~Goel and A.~Wierman, ``Smoothed Online Optimization for Regression and
