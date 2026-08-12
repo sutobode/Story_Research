@@ -43,12 +43,13 @@ applied versus 0 of 16 as originally specified, with realized gains rising
 from $\approx0.21$ to $1.70$--$41.59$; a dead-zone-aware prediction rule
 matches 58 of 64 configurations, and all six exceptions are attributed
 (two to an integer relocation-count channel outside the delay bound's
-scope, four to local-search capability rather than to a dead zone). Eleven
+scope, four to local-search capability rather than to a dead zone). Twelve
 real implementation defects found during this work are disclosed, including
-three that invalidate earlier results in this same report: a $\lambda$
+four that invalidate earlier results in this same report: a $\lambda$
 factorial that never varied anything, two of six ablations that silently
-ablated nothing, and a wall-clock search budget that made published numbers
-depend on machine load. DZ1 is an instance of a documented, general pathology
+ablated nothing, a wall-clock search budget that made published numbers
+depend on machine load, and a crash the fix for that budget itself
+introduced. DZ1 is an instance of a documented, general pathology
 of the weighted-sum method -- incommensurate units in a weighted sum bias
 which tradeoffs are reachable regardless of weight, here in the direction
 of suppressing rather than dominating a term \cite{marler2010} -- and DZ2's
@@ -1503,6 +1504,60 @@ benchmark data rather than only this project's own generated instances.
 This does not change this report's central finding, but it does rule out
 ``the benchmark instances were hand-picked to produce this result'' as an
 explanation: the same pattern holds on data this project did not construct.
+
+\textbf{Does the dead-zone fix (\S\ref{sec:dead-zones}) generalize past
+this project's own 16 generated instances, or only to them?} The table
+above uses the original, dead-zone-afflicted objective -- it predates the
+diagnosis and was never meant to test the fix. Using exactly the same
+forced-single-event, deterministic-budget protocol as
+\S\ref{sec:dead-zone-baselines}'s 16-instance sweep
+(\texttt{run\_lee\_shin\_dead\_zone\_fix.py}), both real instances were
+rerun under the fixed objective ($\tau_{\text{abs}}=0.25$,
+action-scaled delay), 5 seeds each, both event kinds.
+
+\begin{table}[h]
+\centering
+\small
+\begin{tabular}{lrrrr}
+\hline
+Instance & Containers & Static & SAR-CRP (fixed obj.) & Decision \\
+\hline
+Lee R020306 (idx 1) & 20 & 26.000 & 21.4--25.1 & \texttt{UPDATE} (5/5) \\
+Lee R011606 (idx 1) & 70 & 112.500 & 112.500 & \texttt{KEEP} (5/5) \\
+\hline
+\end{tabular}
+\caption{\texttt{urgent\_insertion} event, fixed objective, 5 seeds. Source:
+\texttt{results/lee\_shin\_dead\_zone\_fix.csv}.}
+\label{tab:lee-shin-fix}
+\end{table}
+
+\textbf{The fix generalizes to real published data, but not uniformly --
+reported as found, not smoothed over.} On the 20-container instance, the
+fix unlocks a genuine \texttt{UPDATE} on every seed, at a real cost
+reduction (21.4--25.1 versus Static's 26.0, 4--18\%) -- the same
+qualitative effect as the 16-instance sweep, now confirmed on data this
+project did not construct. On the 70-container instance the decision
+stays \texttt{KEEP} on every seed even under the fixed objective; this is
+consistent with, not contrary to, \S\ref{sec:dead-zones}'s own finding
+that some instances hit a local-search capability limit rather than a
+dead zone (the 10$\times$7 and 14$\times$6 generated instances showed the
+identical pattern), and is reported as an open instance rather than
+investigated further here since distinguishing the two explanations on
+this specific instance was not this check's purpose. Aggregated over
+both instances ($n=10$, both real, no synthetic data): SAR-CRP beats Full
+Reoptimization, Periodic, and MPC with real effect sizes (Wilcoxon
+$p=0.00195$, Cliff's $\delta=-0.5$ against each), and is directionally
+but not significantly better than Static and the no-stability variant at
+this small $n$ ($p=0.0625$, $\delta=-0.25$) -- underpowered rather than
+null, given only 2 real instances exist in this benchmark family. Under
+\texttt{order\_swap} (no urgent container, no delay channel), SAR-CRP
+ties Static exactly on both instances ($p=1.0$, $\delta=0$, UPDATE rate
+0/10) -- the structurally correct null result -- while still beating
+Full Reoptimization, Periodic, and MPC cleanly, the same pattern found on
+the generated instances. This is the strongest available external-validity
+evidence for the fix: not just internally consistent theorems and a
+self-generated sweep, but a real, if partial, effect on literature
+benchmark data the project did not construct.
 
 \section{Reproducibility}
 \label{sec:reproducibility}
