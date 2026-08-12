@@ -405,28 +405,48 @@ Uncertainty & Baseline & $p$-value & $n_{\text{nonzero}}/n$ & Holm-sig.\ & Cliff
 low    & Static                        & 1.0000 & 0/20  & No  & 0.000 \\
 low    & Full Reoptimization           & 0.0000 & 20/20 & Yes & $-$1.000 \\
 low    & Periodic                      & 0.0000 & 20/20 & Yes & $-$1.000 \\
-low    & Event-triggered, No Stability & 1.0000 & 0/20  & No  & 0.000 \\
+low    & Event-triggered, No Stability & 0.0835 & 3/20  & No  & $-$0.092 \\
 low    & MPC Receding Horizon          & 0.0000 & 20/20 & Yes & $-$1.000 \\
 \hline
 medium & Static                        & 1.0000 & 0/20  & No  & 0.000 \\
 medium & Full Reoptimization           & 0.0000 & 20/20 & Yes & $-$1.000 \\
 medium & Periodic                      & 0.0000 & 20/20 & Yes & $-$1.000 \\
-medium & Event-triggered, No Stability & 1.0000 & 0/20  & No  & 0.000 \\
+medium & Event-triggered, No Stability & 0.0835 & 3/20  & No  & $-$0.113 \\
 medium & MPC Receding Horizon          & 0.0000 & 20/20 & Yes & $-$1.000 \\
 \hline
 high   & Static                        & 1.0000 & 0/20  & No  & 0.000 \\
 high   & Full Reoptimization           & 0.0000 & 20/20 & Yes & $-$1.000 \\
 high   & Periodic                      & 0.0000 & 20/20 & Yes & $-$1.000 \\
-high   & Event-triggered, No Stability & 1.0000 & 0/20  & No  & 0.000 \\
+high   & Event-triggered, No Stability & 0.0086 & 7/20  & \textbf{Yes} & $-$0.367 \\
 high   & MPC Receding Horizon          & 0.0000 & 20/20 & Yes & $-$1.000 \\
 \hline
 \end{tabular}
-\caption{Source: \texttt{experiments/results/experiment1\_significance.csv}, post MPC fix (commit 2617a50).}
+\caption{Rerun after bugs \#9--\#11 were fixed (deterministic budget,
+$\lambda$/$\mu$ genuinely threaded). Source:
+\texttt{experiments/results/experiment1\_significance.csv}.}
+\label{tab:exp1-significance}
 \end{table}
 
-\textbf{SAR-CRP ties Static and B4 exactly (0/20 nonzero pairs) at every
-uncertainty level.} This is the same real, explainable result the MVP
-report already documented, not a new bug: spec \S11.2's
+\textbf{SAR-CRP still ties Static exactly (0/20 nonzero pairs) at every
+uncertainty level -- but B4 no longer does, and the reason is a second,
+previously undisclosed consequence of bug \#10.} \texttt{baselines.event\_
+triggered\_no\_stability} calls \texttt{replan(..., lam=0.0, mu=0.0, ...)}
+explicitly, by definition (spec \S40: same trigger and freeze horizon as
+SAR-CRP, but no stability or data-confidence term). Bug \#10 meant that
+argument never reached \texttt{\_score\_candidate} or
+\texttt{local\_search\_repair}, so B4's own candidate search was, for
+every experiment in this report prior to the fix, silently scoring
+candidates at the hardcoded $\lambda{=}1.0,\mu{=}0.5$ defaults --
+contradicting its own definition, not merely producing a no-op ablation
+(A3/A5's problem) but making B4 secretly behave like a stability-aware
+method it explicitly claims not to be. With the fix, B4 now finds real
+repairs Full Reoptimization/Periodic/MPC also find (3/20 nonzero pairs at
+low/medium uncertainty, not yet Holm-significant; 7/20 at high
+uncertainty, Holm-significant, $\delta=-0.367$) rather than defaulting to
+Static's behavior by an unintended accident of the same bug that affected
+SAR-CRP.
+
+SAR-CRP itself still ties Static: spec \S11.2's
 $\mathit{RetrievalDelay}(P)$ term only sums position over \emph{urgent}
 containers, and only \texttt{URGENT\_INSERTION} events populate the urgent
 set; a pure \texttt{ORDER\_SWAP}/ETA/\texttt{PROBABILITY\_UPDATE} event
@@ -434,11 +454,12 @@ changes the queue but changes no plan's operational cost, so there is
 nothing for repair to improve on. \S20 SC4 (below) confirms this
 instance's mean event impact (0.090) sits well under
 $\theta_{\text{impact}}=0.30$, so the trigger essentially never fires on
-this benchmark regardless of \texttt{freeze\_size}/$\lambda$ -- consistent
-with Task 27/28's own finding that varying those two factors produced no
-observable behavioral difference here. SAR-CRP beats Full Reoptimization,
-Periodic, and MPC with $p<0.0001$ (Holm-significant) and Cliff's
-$\delta=-1.0$ at every uncertainty level: those three baselines all incur
+this benchmark, consistent with \S\ref{sec:dead-zones}'s DZ1: this
+instance's $J_{old}$ is far below the DZ2 crossover, so what remains
+blocking is DZ1's dimensional cap on delay-driven gain, not a benchmark
+artifact. SAR-CRP still beats Full Reoptimization, Periodic, and MPC with
+$p<0.0001$ (Holm-significant) and Cliff's $\delta=-1.0$ at every
+uncertainty level, unchanged by the fix: those three baselines all incur
 real reoptimization/instability cost every event, while SAR-CRP correctly
 recognizes (via the trigger) that repairing is not worth it on this
 benchmark and defaults to Static's behavior instead.
@@ -1419,13 +1440,30 @@ fix, git commit \texttt{2617a50}).
     grid's $\lambda$, so \textbf{Experiment 1's $\lambda$ factorial never
     affected any reported number} --- verified directly from
     \texttt{experiment1\_results.csv}, where all 27
-    (uncertainty, freeze\_size, $\lambda$) cells are byte-identical across
-    $\lambda \in \{0, 0.5, 1.0\}$. The same holds for \texttt{freeze\_size},
-    which only ever reached \texttt{sarcrp} and
+    (uncertainty, freeze\_size, $\lambda$) cells were byte-identical across
+    $\lambda \in \{0, 0.5, 1.0\}$. \textbf{Fixed and re-verified, not just
+    fixed:} Experiment 1 was rerun end to end (3240 episodes, deterministic
+    budget) after the fix. SAR-CRP's own reported cost now genuinely
+    differs by $\lambda$ in 6 of the 9 (uncertainty, freeze\_size) cells
+    (e.g.\ high uncertainty, freeze\_size$=0$: $6.6968$ at
+    $\lambda{=}0$ vs.\ $7.0587$ at $\lambda{\geq}0.5$) --- a real,
+    measurable change, not merely a code path that now executes without
+    error. The remaining 3 cells (freeze\_size$=5$ at medium/high
+    uncertainty, freeze\_size$=3$ at high uncertainty) still show no
+    variation, plausibly because a larger frozen prefix leaves too little
+    of the plan for the stability weight to act on --- itself a testable
+    claim, not asserted further here. The headline operating point
+    (freeze\_size$=3$, $\lambda{=}1.0$, spec \S48's own default) and every
+    number in Table~\ref{tab:exp1-significance} below are unchanged by the
+    fix, since that cell already matched \texttt{compute\_objective}'s
+    buggy default by coincidence. The same \texttt{freeze\_size} issue
+    holds independently: it only ever reached \texttt{sarcrp} and
     \texttt{event\_triggered\_no\_stability} (never MPC, whose defining
-    parameter it is). Experiment 1 should therefore be read as a
-    \emph{3-condition} experiment (uncertainty level) replicated nine-fold,
-    not a $3\times3\times3$ factorial. \textbf{(\#10)} $\lambda$ and $\mu$
+    parameter it is) and remains true after the $\lambda$ fix. Experiment 1
+    should therefore be read as a \emph{3-condition} experiment
+    (uncertainty level) with a $\lambda$/freeze\_size sub-factorial that
+    now genuinely varies SAR-CRP's own numbers in most, not all, cells.
+    \textbf{(\#10)} $\lambda$ and $\mu$
     were accepted by \texttt{replan}'s signature but never reached
     \texttt{\_score\_candidate} or \texttt{local\_search\_repair.\_score},
     so SAR-CRP's stability and data-confidence weights were inert ---

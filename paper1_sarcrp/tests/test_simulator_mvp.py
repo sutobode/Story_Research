@@ -145,6 +145,16 @@ def test_time_limit_sec_override_is_accepted():
     assert metrics.total_cost_mean >= 0.0
 
 
+def test_time_limit_sec_none_selects_the_deterministic_budget():
+    # Bug #11 fix: time_limit_sec=None used to crash inside the timeout
+    # check (`None * 0.95`). Every method must accept it -- it is what
+    # every reported number should use to avoid machine/load dependence.
+    for method in ("static", "full_reopt", "periodic", "event_triggered_no_stability", "mpc", "sarcrp"):
+        metrics = run_episode(SMALL_INSTANCE, method_name=method, rng=random.Random(0), time_limit_sec=None)
+        assert metrics.timeout_rate == 0.0  # no clock, so never "timed out"
+        assert metrics.total_cost_mean >= 0.0
+
+
 @pytest.mark.skipif(
     not Path(__file__).parent.parent.joinpath("external", "CRP_RL").is_dir(),
     reason="CRP_RL not cloned (see external/README.md)",

@@ -139,7 +139,7 @@ def run_episode(
 
         is_valid = is_plan_valid(new_plan, state)
         invalid_flags.append(not is_valid)
-        timeout_flags.append(runtime >= time_limit_sec * 0.95)
+        timeout_flags.append(time_limit_sec is not None and runtime >= time_limit_sec * 0.95)
 
         op = operational_cost(new_plan, urgent, is_valid=is_valid)
         stab, violated = stability_cost(new_plan, plan, frozen_count=0)

@@ -39,7 +39,11 @@ def run_factorial(instance: dict, methods=METHODS, seeds=SEEDS) -> list[dict]:
                     h_f_arg = freeze_size if method in METHODS_WITH_FREEZE_HORIZON else None
                     lam_arg = lam if method in METHODS_WITH_LAMBDA else None
                     for seed in seeds:
-                        metrics = run_episode(level_instance, method_name=method, rng=random.Random(seed), h_f=h_f_arg, lam=lam_arg)
+                        # Bug #11 (self-review): a wall-clock cutoff makes
+                        # results machine/load-dependent. time_limit_sec=None
+                        # selects the deterministic iteration-count budget.
+                        metrics = run_episode(level_instance, method_name=method, rng=random.Random(seed),
+                                               h_f=h_f_arg, lam=lam_arg, time_limit_sec=None)
                         rows.append({
                             "uncertainty_level": uncertainty, "freeze_size": freeze_size, "lam": lam,
                             "method": method, "seed": seed,
