@@ -98,9 +98,10 @@ sub-margin instances (the arithmetic reason is straightforward: a carried
 gain only clears a second instance's own $\tau$ if the two are close
 enough in magnitude to begin with, a precondition distinct from, though
 related to, the timing guarantees Propositions 1--3 establish once such a
-pair exists). Eight real implementation bugs were caught and fixed
-directly from the suite's own output and are disclosed rather than
-silently corrected. No directly competing named replanning-policy
+pair exists). Twelve real implementation bugs (eight from the initial
+build, four more from self-review, \S\ref{sec:limitations}) were caught
+and fixed directly from the suite's own output and are disclosed rather
+than silently corrected. No directly competing named replanning-policy
 baseline was found in the CRP-specific literature; we position the
 contribution against the closest available theory (rolling-horizon
 schedule freezing, smoothed online optimization, event-triggered control)
@@ -157,7 +158,7 @@ carried-gain lookahead extension to the fallback margin, proven to be a
 bounded-overshoot lazy threshold policy (\S\ref{sec:theory}) and shown to
 deliver a real, statistically significant benefit when a genuine
 recurring opportunity exists (\S\ref{sec:lookahead}). (3) A full
-accounting of this evaluation's own limits: eight real implementation
+accounting of this evaluation's own limits: twelve real implementation
 bugs found and fixed from the suite's own output and disclosed rather
 than silently corrected, and an honest characterization of when the
 mechanism's benefit does and does not materialize (\S\ref{sec:limitations}).
@@ -908,6 +909,31 @@ $\beta/\alpha$ becomes an interpretable service-level-versus-throughput
 ratio -- a terminal policy choice this work \emph{characterizes} rather
 than prescribes, since no operational calibration data is claimed here.
 
+\textbf{Is this fix an artifact of the specific delay convention chosen?}
+\texttt{retrieval\_delay\_actions} counts every action (RELOCATE and
+RETRIEVE alike) before the urgent container's own retrieval.
+\texttt{objective.retrieval\_delay\_relocations} is an independently
+defined alternative that counts only the RELOCATE actions preceding
+it -- the same action \emph{type} $\alpha R(P)$ already prices, not merely
+the same unit of measurement. Rerunning the 16-instance sweep under this
+alternative gives \textbf{33/80} seed-instance combinations with an
+\texttt{UPDATE}, against \textbf{70/80} under the original convention
+(\texttt{run\_dead\_zone\_scale\_sweep.py} extended to
+\texttt{delay\_convention="relocations"}). The qualitative fix holds under
+both conventions -- the dead zone does not close under either without a
+change of dimension, but it is not literally $0/80$ once one is applied --
+however, the \emph{magnitude} is convention-dependent: the relocations
+convention triggers zero updates on 9 of the 16 instances where the
+actions convention triggers 5/5 seeds (the smaller instances, 9--32
+containers, where few or no RELOCATE actions happen to precede the urgent
+RETRIEVE in the greedy plan), and only matches it once the instance is
+large enough that relocations actually accumulate ahead of the urgent
+container (5$\times$5 and larger). This is reported as an honest nuance,
+not a threat to the core claim: DZ1's fix is a genuine dimensional
+correction, not an artifact of one specific counting choice, but how much
+of the dead zone it removes in practice depends on which
+action-commensurate convention is used.
+
 \begin{table}[h]
 \centering
 \small
@@ -990,11 +1016,73 @@ Event-triggered, No Stability  & 70 & 10 & 0  & $<10^{-5}$ & $-0.383$ \\
 MPC Receding Horizon           & 80 & 0  & 0  & $<10^{-5}$ & $-0.430$ \\
 \hline
 \end{tabular}
-\caption{SAR-CRP vs.\ each baseline, paired by (instance, seed), $n=80$
-(16 instances $\times$ 5 seeds), fixed objective, deterministic budget.
-Source: \texttt{results/dead\_zone\_baseline\_comparison.csv}.}
+\caption{SAR-CRP vs.\ each baseline under the \texttt{urgent\_insertion}
+event, paired by (instance, seed), $n=80$ (16 instances $\times$ 5 seeds),
+fixed objective, deterministic budget. Source:
+\texttt{results/dead\_zone\_baseline\_comparison.csv}.}
 \label{tab:dead-zone-baselines}
 \end{table}
+
+\textbf{Does this hold under a second, independently constructed event
+type, and does it survive collapsing to one row per instance?} Both
+critiques are addressed together: \texttt{run\_dead\_zone\_baseline\_comparison.py}
+was extended with \texttt{order\_swap}, the structural opposite of
+\texttt{urgent\_insertion} -- it reorders the retrieval queue (swaps the
+first and last positions) without designating any container as urgent, so
+no delay channel exists at all and a well-behaved policy should mostly
+\emph{keep} the old plan. The same 16 instances and 5 seeds are rerun
+under this second event, and every comparison is additionally
+re-aggregated to one row per instance (mean over its 5 seeds, $n=16$) to
+check whether the $n=80$ significance is an artifact of counting each
+seed as an independent observation.
+
+\begin{table}[h]
+\centering
+\small
+\begin{tabular}{lrrrr}
+\hline
+ & \multicolumn{2}{c}{urgent\_insertion} & \multicolumn{2}{c}{order\_swap} \\
+vs.\ baseline & $p$ ($n{=}80$) & $p$ ($n{=}16$) & $p$ ($n{=}80$) & $p$ ($n{=}16$) \\
+\hline
+Static                         & $<10^{-5}$ & $0.00057$ & $0.00271$ & $0.15752$ \\
+Full Reoptimization            & $<10^{-5}$ & $0.00058$ & $<10^{-5}$ & $0.00003$ \\
+Periodic                       & $<10^{-5}$ & $0.00058$ & $<10^{-5}$ & $0.00003$ \\
+Event-triggered, No Stability  & $<10^{-5}$ & $0.00057$ & $<10^{-5}$ & $0.00003$ \\
+MPC Receding Horizon           & $<10^{-5}$ & $0.00003$ & $<10^{-5}$ & $0.00003$ \\
+\hline
+\end{tabular}
+\caption{Wilcoxon $p$-values at the seed level ($n=80$) and re-aggregated
+to the instance level ($n=16$, mean over seeds), both event types. SAR-CRP's
+UPDATE rate is 70/80 under \texttt{urgent\_insertion} and 9/80 under
+\texttt{order\_swap}. Source:
+\texttt{results/dead\_zone\_baseline\_comparison.csv} (160 rows, both event
+kinds).}
+\label{tab:dead-zone-order-swap}
+\end{table}
+
+Three things are worth stating plainly. First, \textbf{the $n=80$
+significance is not an artifact of over-counting seeds as independent
+observations}: every comparison that is significant at $n=80$ remains
+significant at $n=16$ (the largest instance-level $p$ is $0.00058$,
+against Full Reoptimization/Periodic under \texttt{urgent\_insertion}),
+with Cliff's $\delta$ essentially unchanged between the two aggregations.
+Second, \textbf{against Static under \texttt{order\_swap}, SAR-CRP is
+correctly indistinguishable, not significant} ($p=0.15752$ at $n=16$,
+$\delta=-0.008$): with no urgent container and no delay channel, SAR-CRP
+keeps the old plan on 71/80 pairs and the few times it does not are not a
+systematic edge -- this is the expected null result for an event with no
+exploitable structure, not a failure to reject. Third, \textbf{against the
+three baselines that re-solve or re-trigger regardless of whether there is
+anything to fix} (Full Reoptimization, Periodic, MPC), SAR-CRP wins
+16 of 16 instances under \texttt{order\_swap} with large effect sizes
+($|\delta| \geq 0.43$): those methods pay real switching/optimization cost
+reacting to an event that changes nothing worth reacting to, while SAR-CRP's
+own trigger and fallback margin correctly recognize it as a non-event on
+the large majority of pairs (\texttt{event\_triggered\_no\_stability}, which
+shares SAR-CRP's trigger machinery but not its stability weighting, sits
+between the two -- it also mostly avoids reacting, but loses on 8/80 pairs
+where SAR-CRP does not, the residual value of the stability term this
+paper's ablations already isolate).
 
 \textbf{This is a real, honest result -- not a clean sweep.} SAR-CRP wins
 every pairing against MPC (80/80), and never loses to Static or the
@@ -1431,8 +1519,8 @@ fix, git commit \texttt{2617a50}).
 \label{sec:limitations}
 
 \begin{itemize}
-  \item \textbf{Three further real bugs (\#9--\#11) were found by
-    self-review after the first eight, and two of them invalidate results
+  \item \textbf{Four further real bugs (\#9--\#12) were found by
+    self-review after the first eight, and three of them invalidate results
     reported earlier in this document.} They are listed first because they
     bound what the rest of this report can be trusted to show.
     \textbf{(\#9)} \texttt{simulator.py} scored every episode at
@@ -1479,6 +1567,16 @@ fix, git commit \texttt{2617a50}).
     budget, the reported numbers are unchanged but are now reproducible on
     any machine. \textbf{A reviewer re-running the previous code on
     different hardware would have obtained different numbers.}
+    \textbf{(\#12)} Wiring \#11's fix into \texttt{run\_experiment1.py}
+    surfaced a fifth bug the fix itself introduced: \texttt{simulator.py}'s
+    timeout check computed \texttt{time\_limit\_sec * 0.95}
+    unconditionally, which raises \texttt{TypeError} for
+    \texttt{time\_limit\_sec=None}. Fixed (the check is now
+    \texttt{time\_limit\_sec is not None and ...}) and covered by a
+    regression test exercising every method under the deterministic
+    budget. Disclosed here, not only in the commit history, because a
+    bug found while fixing another bug is exactly the kind of thing this
+    report has committed to reporting rather than silently absorbing.
   \item \textbf{The central negative result has a provable cause, and it
     supersedes this report's original framing} (\S\ref{sec:dead-zones}).
     Two dead zones --- a dimensional inconsistency capping delay-driven

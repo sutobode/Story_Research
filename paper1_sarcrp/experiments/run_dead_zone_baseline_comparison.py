@@ -62,11 +62,34 @@ def score(plan, plan_old, urgent, conf_new, state) -> float:
     return compute_objective(op, stab, data)
 
 
-def run_instance(num_stacks: int, containers_per_stack: int, seed: int) -> dict:
-    state, old_queue, target = build_instance(num_stacks, containers_per_stack)
+def build_event(old_queue: list[str], event_kind: str) -> tuple[list[str], list[str]]:
+    """Two deterministic event constructions, not one -- R1.2 (reviewer
+    critique): the dead-zone sweep and the original baseline comparison
+    both used only "urgent_insertion", so every decisive result in this
+    report rested on a single disruption type. "order_swap" is the
+    structural opposite case: no container becomes urgent (urgent=[]), so
+    RetrievalDelayNorm/retrieval_delay_actions are identically 0 by
+    construction (event_generator.py's own convention: only
+    URGENT_INSERTION populates the urgent set) -- any gain here can only
+    come from the relocation-count channel, not delay, isolating that
+    channel's contribution from DZ1/DZ2 entirely."""
+    if event_kind == "urgent_insertion":
+        target = old_queue[-1]
+        return [target] + [c for c in old_queue if c != target], [target]
+    if event_kind == "order_swap":
+        # A large, deterministic reordering (swap first and last position)
+        # -- not sampled, for the same reproducibility reason every other
+        # event in this report is constructed deterministically.
+        new_queue = list(old_queue)
+        new_queue[0], new_queue[-1] = new_queue[-1], new_queue[0]
+        return new_queue, []
+    raise ValueError(f"unknown event_kind: {event_kind!r}")
+
+
+def run_instance(num_stacks: int, containers_per_stack: int, seed: int, event_kind: str = "urgent_insertion") -> dict:
+    state, old_queue, _ = build_instance(num_stacks, containers_per_stack)
     plan_old = solve_crp(state, old_queue, time_limit_sec=None)
-    new_queue = [target] + [c for c in old_queue if c != target]
-    urgent = [target]
+    new_queue, urgent = build_event(old_queue, event_kind)
     rng = random.Random(seed)
 
     plans = {}
@@ -87,34 +110,19 @@ def run_instance(num_stacks: int, containers_per_stack: int, seed: int) -> dict:
     costs = {m: score(p, plan_old, urgent, SCALE_EVENT_CONFIDENCE, state) for m, p in plans.items()}
     return {
         "num_stacks": num_stacks, "containers_per_stack": containers_per_stack,
-        "n_containers": num_stacks * containers_per_stack, "seed": seed,
+        "n_containers": num_stacks * containers_per_stack, "seed": seed, "event_kind": event_kind,
         "sarcrp_decision": d_sarcrp.decision,
         **{f"cost_{m}": costs[m] for m in METHODS},
     }
 
 
-def main():
-    _start = time.monotonic()
-    print(f"tau_abs (derived, kappa=0.5) = {TAU_ABS}")
-    rows = []
-    for ns, cps in SCALE_GRID:
-        for seed in SEEDS:
-            rows.append(run_instance(ns, cps, seed))
-
-    out = Path(__file__).parent / "results" / "dead_zone_baseline_comparison.csv"
-    out.parent.mkdir(parents=True, exist_ok=True)
-    with out.open("w", newline="") as f:
-        w = csv.DictWriter(f, fieldnames=list(rows[0].keys()))
-        w.writeheader()
-        w.writerows(rows)
-    print(f"Wrote {out}\n")
-
-    print(f"{'inst':>8} {'n':>4} " + "".join(f"{m[:10]:>12}" for m in METHODS) + "  decision")
+def print_comparison(rows: list[dict], label: str) -> None:
+    print(f"\n{'inst':>8} {'n':>4} " + "".join(f"{m[:10]:>12}" for m in METHODS) + "  decision")
     for r in rows:
         print(f"{r['num_stacks']:>3}x{r['containers_per_stack']:<4} {r['n_containers']:>4} "
               + "".join(f"{r[f'cost_{m}']:>12.3f}" for m in METHODS) + f"  {r['sarcrp_decision']}")
 
-    print("\n=== SAR-CRP vs. each baseline, paired by (instance, seed), n={} ===".format(len(rows)))
+    print(f"\n=== [{label}] SAR-CRP vs.\\ each baseline, paired by (instance, seed), n={len(rows)} ===")
     sarcrp_costs = [r["cost_sarcrp"] for r in rows]
     for m in METHODS:
         if m == "sarcrp":
@@ -129,11 +137,54 @@ def main():
               f"mean(sarcrp)={statistics.mean(sarcrp_costs):.3f} mean({m})={statistics.mean(other):.3f}  "
               f"wilcoxon_p={wr.p_value:.5f} cliffs_delta={delta:.3f}")
 
+    # R2.1 (reviewer critique): n=80 is not 80 statistically independent
+    # points -- 5 seeds within the same instance only absorb local-search
+    # noise, the instance is the real unit of independence. Aggregate to
+    # one point per instance (mean over seeds) and re-test at n=16.
+    by_instance = {}
+    for r in rows:
+        key = (r["num_stacks"], r["containers_per_stack"])
+        by_instance.setdefault(key, []).append(r)
+    inst_sarcrp = [statistics.mean(r["cost_sarcrp"] for r in grp) for grp in by_instance.values()]
+    print(f"\n  --- same comparison aggregated to n={len(inst_sarcrp)} instances (mean over seeds) ---")
+    for m in METHODS:
+        if m == "sarcrp":
+            continue
+        inst_other = [statistics.mean(r[f"cost_{m}"] for r in grp) for grp in by_instance.values()]
+        n_better = sum(1 for a, b in zip(inst_sarcrp, inst_other) if a < b)
+        n_tied = sum(1 for a, b in zip(inst_sarcrp, inst_other) if a == b)
+        n_worse = sum(1 for a, b in zip(inst_sarcrp, inst_other) if a > b)
+        wr = wilcoxon_signed_rank(inst_sarcrp, inst_other)
+        delta = cliffs_delta(inst_sarcrp, inst_other)
+        print(f"  vs {m:>28}: sarcrp better={n_better} tied={n_tied} worse={n_worse}  "
+              f"wilcoxon_p={wr.p_value:.5f} cliffs_delta={delta:.3f}")
+
     n_update = sum(1 for r in rows if r["sarcrp_decision"] == "UPDATE")
-    print(f"\nSAR-CRP UPDATE rate: {n_update}/{len(rows)}")
+    print(f"\n  SAR-CRP UPDATE rate [{label}]: {n_update}/{len(rows)}")
+
+
+def main():
+    _start = time.monotonic()
+    print(f"tau_abs (derived, kappa=0.5) = {TAU_ABS}")
+
+    all_rows = []
+    for event_kind in ("urgent_insertion", "order_swap"):
+        rows = [run_instance(ns, cps, seed, event_kind=event_kind)
+                for ns, cps in SCALE_GRID for seed in SEEDS]
+        all_rows.extend(rows)
+        print_comparison(rows, event_kind)
+
+    out = Path(__file__).parent / "results" / "dead_zone_baseline_comparison.csv"
+    out.parent.mkdir(parents=True, exist_ok=True)
+    with out.open("w", newline="") as f:
+        w = csv.DictWriter(f, fieldnames=list(all_rows[0].keys()))
+        w.writeheader()
+        w.writerows(all_rows)
+    print(f"\nWrote {out} ({len(all_rows)} rows)")
 
     log_run("run_dead_zone_baseline_comparison.py",
-            {"scale_grid": [list(x) for x in SCALE_GRID], "seeds": list(SEEDS), "tau_abs": TAU_ABS},
+            {"scale_grid": [list(x) for x in SCALE_GRID], "seeds": list(SEEDS), "tau_abs": TAU_ABS,
+             "event_kinds": ["urgent_insertion", "order_swap"]},
             time.monotonic() - _start, [])
 
 

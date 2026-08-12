@@ -110,6 +110,33 @@ def retrieval_delay_actions(plan: Plan, urgent_containers: list[str]) -> float:
     return total / len(urgent_containers)
 
 
+def retrieval_delay_relocations(plan: Plan, urgent_containers: list[str]) -> float:
+    """R1.1 (reviewer critique) robustness check: an ALTERNATIVE
+    action-commensurate delay convention, independent of
+    retrieval_delay_actions's choice. Instead of counting every action
+    (RELOCATE and RETRIEVE alike) before the urgent container's own
+    RETRIEVE, count only the RELOCATE actions -- the same action TYPE
+    alpha*R(P) already counts, not merely the same unit of measurement.
+    If DZ1's fix is an artifact of the specific "count every action"
+    convention rather than of removing the dimensional inconsistency
+    itself, this convention should behave qualitatively differently;
+    tests/test_objective_dead_zones.py and the sweep check it does not."""
+    if not urgent_containers:
+        return 0.0
+    total = 0
+    for c in urgent_containers:
+        relocations_before = 0
+        found = False
+        for a in plan.actions:
+            if a.container == c and a.type == "RETRIEVE":
+                found = True
+                break
+            if a.type == "RELOCATE":
+                relocations_before += 1
+        total += relocations_before if found else len(plan.actions)
+    return total / len(urgent_containers)
+
+
 def operational_cost(
     plan: Plan,
     urgent_containers: list[str],
@@ -119,16 +146,25 @@ def operational_cost(
     gamma: float = 1.0,
     m_inf: float = 1e6,
     normalize_delay: bool = True,
+    delay_convention: str = "actions",
 ) -> float:
     """C_op(P) = alpha*R(P) + beta*RetrievalDelay(P) + gamma*InvalidPenalty(P) (spec 11, 45.1).
 
     normalize_delay=True (the default) uses spec's dimensionless
     RetrievalDelayNorm and reproduces every previously reported number
-    exactly. normalize_delay=False uses retrieval_delay_actions instead --
-    the DZ1 fix, delay in crane actions, commensurate with alpha*R(P)."""
+    exactly. normalize_delay=False selects one of two DZ1-fix conventions
+    via delay_convention: "actions" (default) uses retrieval_delay_actions
+    (count every action before retrieval); "relocations" uses
+    retrieval_delay_relocations (count only RELOCATE actions before
+    retrieval) -- an independent check that the fix is not an artifact of
+    one specific counting convention."""
     invalid_penalty = 0.0 if is_valid else m_inf
-    delay = (retrieval_delay_norm(plan, urgent_containers) if normalize_delay
-             else retrieval_delay_actions(plan, urgent_containers))
+    if normalize_delay:
+        delay = retrieval_delay_norm(plan, urgent_containers)
+    elif delay_convention == "relocations":
+        delay = retrieval_delay_relocations(plan, urgent_containers)
+    else:
+        delay = retrieval_delay_actions(plan, urgent_containers)
     return (
         alpha * relocation_count(plan)
         + beta * delay

@@ -40,7 +40,7 @@ def _build_c3(plan_old: Plan, frozen: Plan, tail_solution: Plan) -> Plan:
 
 
 def _score_candidate(plan: Plan, plan_old: Plan, frozen_count: int, urgent_containers: list[str], conf_new: float, state,
-                      lam: float = 1.0, mu: float = 0.5, normalize_delay: bool = True):
+                      lam: float = 1.0, mu: float = 0.5, normalize_delay: bool = True, delay_convention: str = "actions"):
     """Scores a candidate plan against spec 11's C_op (which includes the
     M_inf invalidity penalty) -- `is_valid` was hardcoded True here
     unconditionally until this fix, so a candidate that replays illegally
@@ -59,7 +59,7 @@ def _score_candidate(plan: Plan, plan_old: Plan, frozen_count: int, urgent_conta
     threaded through; the defaults reproduce every previously-reported
     number exactly."""
     is_valid = is_plan_valid(plan, state)
-    op = operational_cost(plan, urgent_containers, is_valid=is_valid, normalize_delay=normalize_delay)
+    op = operational_cost(plan, urgent_containers, is_valid=is_valid, normalize_delay=normalize_delay, delay_convention=delay_convention)
     stab, violated = stability_cost(plan, plan_old, frozen_count)
     if violated:
         return float("inf")
@@ -176,6 +176,7 @@ def replan(
     tau_frac: float = 0.01,
     tau_abs: float | None = None,
     normalize_delay: bool = True,
+    delay_convention: str = "actions",
     # REPRODUCIBILITY (bug #11, self-review): a wall-clock cutoff makes
     # results machine- and load-dependent. Measured on the 44-container
     # existence-proof instance: the local-search walk finishes naturally in
@@ -217,7 +218,7 @@ def replan(
 
     # Step 3: trigger check.
     if impact.total < theta_impact:
-        j_old = _score_candidate(plan_old, plan_old, 0, urgent_containers, conf_new, state_t, lam=lam, mu=mu, normalize_delay=normalize_delay)
+        j_old = _score_candidate(plan_old, plan_old, 0, urgent_containers, conf_new, state_t, lam=lam, mu=mu, normalize_delay=normalize_delay, delay_convention=delay_convention)
         return ReplanDecision(decision="KEEP", plan=plan_old, impact=impact, j_old=j_old, j_new=j_old,
                                carried_gain_next=carried_gain)
 
@@ -233,7 +234,7 @@ def replan(
         c2 = local_search_repair(
             c1, plan_old, state_t, new_queue, frozen_count, rng,
             urgent_containers=urgent_containers, conf_new=conf_new, time_limit_sec=time_limit_sec,
-            lam=lam, mu=mu, normalize_delay=normalize_delay,
+            lam=lam, mu=mu, normalize_delay=normalize_delay, delay_convention=delay_convention,
         )
         candidates.append(c2)
     shadow_state, remaining_queue = apply_frozen_prefix(state_t, frozen, new_queue)
@@ -242,11 +243,11 @@ def replan(
     candidates.append(c3)
 
     # Step 6: score every candidate.
-    scored = [(_score_candidate(c, plan_old, frozen_count, urgent_containers, conf_new, state_t, lam=lam, mu=mu, normalize_delay=normalize_delay), c) for c in candidates]
+    scored = [(_score_candidate(c, plan_old, frozen_count, urgent_containers, conf_new, state_t, lam=lam, mu=mu, normalize_delay=normalize_delay, delay_convention=delay_convention), c) for c in candidates]
 
     # Step 7: select best.
     j_best, p_best = min(scored, key=lambda pair: pair[0])
-    j_old = _score_candidate(plan_old, plan_old, 0, urgent_containers, conf_new, state_t, lam=lam, mu=mu, normalize_delay=normalize_delay)
+    j_old = _score_candidate(plan_old, plan_old, 0, urgent_containers, conf_new, state_t, lam=lam, mu=mu, normalize_delay=normalize_delay, delay_convention=delay_convention)
 
     # Step 8: fallback check (extended with the carried-gain lookahead margin).
     #

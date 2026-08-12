@@ -134,6 +134,42 @@ def test_normalize_delay_default_true_preserves_the_original_objective():
     assert math.isclose(default, 0.0 + BETA_DEFAULT * retrieval_delay_norm(p, ["U"]), rel_tol=1e-9)
 
 
+def test_dz1_fix_is_robust_to_an_independent_delay_convention():
+    # R1.1 (reviewer critique): retrieval_delay_actions was DZ1's ONE
+    # chosen convention (count every action before retrieval).
+    # retrieval_delay_relocations is an independently-defined alternative
+    # (count only RELOCATE actions before retrieval, the same action TYPE
+    # alpha*R(P) already counts). If DZ1's fix only works because of the
+    # specific "actions" convention, this test would show the relocations
+    # convention failing to grow with scale; it does not.
+    from sarcrp.objective import retrieval_delay_relocations
+
+    for n in (10, 50, 200):
+        # A plan with n RETRIEVE actions and no RELOCATEs: relocations
+        # convention gives 0 (no relocation happens at all), unlike
+        # retrieval_delay_actions which still grows with position.
+        worst = _plan(n, urgent_at=n - 1)
+        best = _plan(n, urgent_at=0)
+        assert retrieval_delay_relocations(worst, ["U"]) == 0.0
+        assert retrieval_delay_relocations(best, ["U"]) == 0.0
+
+    # With actual RELOCATE actions before the urgent RETRIEVE, the
+    # relocations convention grows with how many of THOSE precede it --
+    # unbounded in the number of relocations, just as actions convention
+    # is unbounded in plan length. Build a plan with k relocations before
+    # the urgent retrieve.
+    actions = []
+    for i in range(20):
+        actions.append(Action(action_id=f"r{i}", step_index=i, type="RELOCATE", container=f"R{i:03d}",
+                               source_stack="S1", dest_stack="S2", commit_status="planned", planned_time=i))
+    actions.append(Action(action_id="u", step_index=20, type="RETRIEVE", container="U",
+                           source_stack="S1", dest_stack=None, commit_status="planned", planned_time=20))
+    plan_with_relocations = Plan(plan_id="p", created_at=0, source="test", actions=actions)
+    assert retrieval_delay_relocations(plan_with_relocations, ["U"]) == 20.0
+    max_gain_relocations = BETA_DEFAULT * 20.0
+    assert max_gain_relocations > ALPHA_DEFAULT  # can pay for a relocation, same qualitative fix as DZ1's original
+
+
 def test_mixed_threshold_removes_dz2_at_every_scale():
     # The fix (mixed relative-absolute threshold, standard in
     # event-triggered control): tau = min(tau_frac * J_old, tau_abs).

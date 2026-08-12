@@ -2,7 +2,7 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent / "experiments"))
-from run_dead_zone_baseline_comparison import METHODS, run_instance  # noqa: E402
+from run_dead_zone_baseline_comparison import METHODS, build_event, run_instance  # noqa: E402
 
 
 def test_run_instance_scores_every_method_under_the_same_objective():
@@ -39,3 +39,24 @@ def test_static_cost_never_changes_the_plan_so_never_pays_stability_cost():
     # only that static's own score is internally consistent).
     r = run_instance(3, 3, seed=20)
     assert r["cost_static"] > 0.0
+
+
+def test_order_swap_event_designates_no_urgent_container():
+    # R1.2 (reviewer critique): the single-event-type limitation. order_swap
+    # is the structural opposite of urgent_insertion -- no delay channel is
+    # even possible, by event_generator.py's own convention that only
+    # URGENT_INSERTION populates the urgent set.
+    old_queue = ["C1", "C2", "C3", "C4"]
+    new_queue, urgent = build_event(old_queue, "order_swap")
+    assert urgent == []
+    assert sorted(new_queue) == sorted(old_queue)
+    assert new_queue != old_queue  # a real reordering happened
+    assert new_queue[0] == old_queue[-1] and new_queue[-1] == old_queue[0]
+
+
+def test_run_instance_accepts_the_order_swap_event_kind():
+    r = run_instance(4, 3, seed=20, event_kind="order_swap")
+    assert r["event_kind"] == "order_swap"
+    for m in METHODS:
+        assert r[f"cost_{m}"] >= 0.0
+        assert r[f"cost_{m}"] < float("inf")
